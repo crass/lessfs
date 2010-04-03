@@ -1,0 +1,304 @@
+file_io.c:    data = search_memhash(dbum, stiger, config->hashlen);
+file_io.c:       data = search_dbdata(dbu, stiger, config->hashlen);
+file_io.c:        mbin_write_dbdata(dbum, stiger, config->hashlen, (unsigned char *) inuse,
+file_io.c:    mbin_write_dbdata(dbdtaq, stiger, config->hashlen, dta, sizeof(QDTA));
+file_io.c:    data = search_memhash(dbdtaq, stiger, config->hashlen);
+file_io.c:                if (0 == memcmp(dtiger, stiger, config->hashlen)) {
+file_io.c:            mdelete_key(dbdtaq, kdata, config->hashlen);
+file_io.c:    if (!tcmdbout(dbdtaq, chksum, config->hashlen)) {
+file_io.c:        decrypted = search_memhash(dbdtaq, chksum, config->hashlen);
+file_io.c:                    if (0 == memcmp(dtiger, chksum, config->hashlen)) {
+file_io.c:       data = search_memhash(dbdtaq, stiger, config->hashlen);
+lessfs.c:    if (NULL != config->blockdatabs) {
+lessfs.c:    if (NULL != config->blockdatabs) {
+lessfs.c:    if ( config->relax == 0 ) dbsync();
+lessfs.c:       if (NULL != config->blockdatabs) {
+lessfs.c:        if (NULL != config->blockdatabs) {
+lessfs.c:            if (NULL != config->blockdatabs) {
+lessfs.c:    if (NULL != config->blockdatabs) {
+lessfs.c:        res = statvfs(config->blockdata, stbuf);
+lessfs.c:        blockdatadir = s_dirname(config->blockdata);
+lessfs.c:            if ( NULL == config->blockdatabs) fdatasync(fdbdta);
+lessfs.c:    if (config->relax < 2) {
+lessfs.c:    /* When config->relax == 1 dbsync is not called but the caches within lessfs
+lessfs.c:    if (config->relax == 0)
+lessfs.c:    if ( config->transactions) lessfs_trans_stamp();
+lessfs.c:    if (config->encryptdata){
+lessfs.c:       free(config->passwd);
+lessfs.c:       free(config->iv);
+lessfs.c:    free(config->commithash);
+lessfs.c:   int sleeptime=config->flushtime;
+lessfs.c:         sleeptime=config->flushtime;
+lessfs.c:   int sleeptime=config->flushtime;
+lessfs.c:         sleeptime=config->flushtime;
+lessfs.c:                  dbpath = as_sprintf("%s/fileblock.tch", config->fileblock);
+lessfs.c:                  dbpath = as_sprintf("%s/blockusage.tch", config->blockusage);
+lessfs.c:                  dbpath = as_sprintf("%s/metadata.tcb", config->meta);
+lessfs.c:                  if (NULL != config->blockdatabs) {
+lessfs.c:                       dbpath = as_sprintf("%s/blockdata.tch", config->blockdata);
+lessfs.c:                       dbpath = s_strdup(config->blockdata);
+lessfs.c:                  dbpath = as_sprintf("%s/symlink.tch", config->symlink);
+lessfs.c:                  dbpath = as_sprintf("%s/dirent.tcb", config->dirent);
+lessfs.c:                  dbpath = as_sprintf("%s/hardlink.tcb", config->hardlink);
+lessfs.c:           sleep(config->inspectdiskinterval);
+lessfs.c:        sleep(config->flushtime);
+lessfs.c:        if ( config->transactions) lessfs_trans_stamp(); 
+lessfs.c:        if (NULL == config->blockdatabs) {
+lessfs.c:              bin_write_dbdata(dbu, config->nexthash, config->hashlen, (unsigned char *) &nextoffset,
+lessfs.c:        if ( config->blockdatabs != NULL ) {
+lessfs.c:            if ( config->transactions ) tchdbtrancommit(dbdta);
+lessfs.c:            if ( config->transactions ) tcbdbtrancommit(freelist);
+lessfs.c:        if ( config->transactions ) {
+lessfs.c:        if ( config->blockdatabs == NULL ) {
+lessfs.c:        if ( config->transactions ) {
+lessfs.c:           if ( config->blockdatabs != NULL ){
+lessfs.c:        sleep(config->flushtime);
+lessfs.c:        if ( config->relax > 0 ) {
+lessfs.c:           if ( config->blockdatabs == NULL ) {
+lessfs.c:        if (NULL != config->blockdatabs) {
+lessfs.c:    if ( config->blockdatabs != NULL ) {
+lessfs.c:    if ( NULL == config->blockdatabs ) {
+lessfs.c:    hashstr=as_sprintf("BMW%i",config->hashlen);
+lessfs.c:    hashstr=as_sprintf("TGR%i",config->hashlen);
+lessfs.c:    if ( NULL == config->blockdatabs ) {
+lessfs.c:    if ( config->transactions ) {
+lessfs.c:       config->commithash=sha_binhash((unsigned char *)"COMMITSTAMP", strlen("COMMITSTAMP"));
+lessfs.c:       config->commithash=s_malloc(config->hashlen);
+lessfs.c:       memcpy(config->commithash,(unsigned char *)&res,config->hashlen);
+lessfs.c:       if ( config->blockdatabs != NULL ) {
+lessfs.c:           inuse=getInUse(config->commithash);
+lessfs.c:           finuse=file_get_inuse(config->commithash);
+lessfs.c:       if ( config->transactions ) {
+lessfs.c:       if ( config->transactions ) {
+lessfsck.c:    data = search_dbdata(dbu, lfshash, config->hashlen);
+lessfsck.c:    for (n = 0; n < config->hashlen ; n++) {
+lessfsck.c:   if ( 0 == memcmp(config->nexthash, hash->data, config->hashlen)){
+lessfsck.c:    if (NULL == config->blockdatabs) {
+lessfsck.c:        blockdatadir = s_dirname(config->blockdata);
+lessfsck.c:        stat(config->blockdata, &stbuf);
+lessfsck.c:                      if ( NULL != config->blockdatabs ) { 
+lessfsck.c:           if (!tchdbout(dbdta, key, config->hashlen)) {
+lessfsck.c:    if (-1 == stat(config->blockdata, &stbuf) ) die_dataerr("%s does not exist.\n",config->blockdata);
+lessfsck.c:    if ( NULL != config->blockdatabs ){
+lessfsck.c:    if (config->encryptdata) {
+lessfsck.c:        free(config->passwd);
+lessfsck.c:        free(config->iv);
+lib_crypto.c:    len = strlen((char *) config->passwd);
+lib_crypto.c:    memcpy(safepasswd, config->passwd, len);
+lib_crypto.c:    EVP_EncryptInit(&ctx, EVP_bf_cbc(), safepasswd, config->iv);
+lib_crypto.c:    EVP_DecryptInit(&ctx, EVP_bf_cbc(), safepasswd, config->iv);
+lib_tc.c:    for (n = 0; n < config->hashlen ; n++) {
+lib_tc.c:    for (n = 0; n < config->hashlen ; n++) {
+lib_tc.c:    if (config->defrag == 1) {
+lib_tc.c:    if (!tchdboptimize(dbb, atol(config->fileblockbs), 0, 0, HDBTLARGE))
+lib_tc.c:    if (!tchdboptimize(dbu, atol(config->blockusagebs), 0, 0, HDBTLARGE))
+lib_tc.c:    if (!tchdboptimize(dbp, atol(config->metabs), 0, 0, HDBTLARGE))
+lib_tc.c:    if (!tchdboptimize(dbs, atol(config->symlinkbs), 0, 0, HDBTLARGE))
+lib_tc.c:    if (NULL != config->blockdatabs) {
+lib_tc.c:            (dbdta, atol(config->blockdatabs), 0, 0, HDBTLARGE))
+lib_tc.c:        if (!tcbdboptimize(freelist, 0, 0, atol(config->freelistbs), -1, -1, BDBTLARGE))
+lib_tc.c:        (dbdirent, 0, 0, atol(config->direntbs), -1, -1, BDBTLARGE))
+lib_tc.c:        (dbl, 0, 0, atol(config->hardlinkbs), -1, -1, BDBTLARGE))
+lib_tc.c:    if (-1 == stat(config->blockdata, &stbuf) ) 
+lib_tc.c:        die_dataerr("Failed to stat %s\n",config->blockdata);
+lib_tc.c:       LINFO("Rollback : truncate %s from %llu to %llu",config->blockdata,stbuf.st_size,rsize);
+lib_tc.c:    dbpath = as_sprintf("%s/fileblock.tch", config->fileblock);
+lib_tc.c:    if ( createpath ) mkpath(config->fileblock,0744);
+lib_tc.c:    dbb = hashdb_open(dbpath, 2621440, atol(config->fileblockbs));
+lib_tc.c:    dbpath = as_sprintf("%s/blockusage.tch", config->blockusage);
+lib_tc.c:    if ( createpath ) mkpath(config->blockusage,0744);
+lib_tc.c:    dbu = hashdb_open(dbpath, 2621440, atol(config->blockusagebs));
+lib_tc.c:    dbpath = as_sprintf("%s/metadata.tcb", config->meta);
+lib_tc.c:    if ( createpath ) mkpath(config->meta,0744);
+lib_tc.c:    dbp = hashdb_open(dbpath, 1000, atol(config->metabs));
+lib_tc.c:    if (NULL != config->blockdatabs) {
+lib_tc.c:        dbpath = as_sprintf("%s/blockdata.tch", config->blockdata);
+lib_tc.c:        if ( createpath ) mkpath(config->blockdata,0744);
+lib_tc.c:        dbdta = hashdb_open(dbpath, 10, atol(config->blockdatabs));
+lib_tc.c:        sp=s_dirname(config->blockdata);
+lib_tc.c:        tcbdbtune(freelist, 0, 0, atol(config->freelistbs), -1, -1,
+lib_tc.c:        dbpath = as_sprintf("%s/freelist.tcb", config->freelist);
+lib_tc.c:        if ( createpath ) mkpath(config->freelist,0744);
+lib_tc.c:        if (config->defrag == 1) {
+lib_tc.c:    dbpath = as_sprintf("%s/symlink.tch", config->symlink);
+lib_tc.c:    if ( createpath ) mkpath(config->symlink,0744);
+lib_tc.c:    dbs = hashdb_open(dbpath, 10, atol(config->symlinkbs));
+lib_tc.c:    tcbdbtune(dbdirent, 0, 0, atol(config->direntbs), -1, -1, BDBTLARGE);
+lib_tc.c:    dbpath = as_sprintf("%s/dirent.tcb", config->dirent);
+lib_tc.c:    if ( createpath ) mkpath(config->dirent,0744);
+lib_tc.c:    if (config->defrag == 1) {
+lib_tc.c:    tcbdbtune(dbl, 0, 0, atol(config->hardlinkbs), -1, -1, BDBTLARGE);
+lib_tc.c:    dbpath = as_sprintf("%s/hardlink.tcb", config->hardlink);
+lib_tc.c:    if ( createpath ) mkpath(config->hardlink,0744);
+lib_tc.c:    if (config->defrag == 1) {
+lib_tc.c:        if (NULL == config->blockdatabs) {
+lib_tc.c:                 s_open2(config->blockdata, O_CREAT | O_RDWR, S_IRWXU)))
+lib_tc.c:            if (-1 == (stat(config->blockdata, &stbuf)))
+lib_tc.c:            config->nexthash=sha_binhash((unsigned char *)hashstr, strlen(hashstr));
+lib_tc.c:            config->nexthash=s_malloc(config->hashlen);
+lib_tc.c:            memcpy(config->nexthash,(unsigned char *)&res,config->hashlen);
+lib_tc.c:            data = search_dbdata(dbu, config->nexthash, config->hashlen);
+lib_tc.c:    if ( config->transactions ) {
+lib_tc.c:       if (NULL != config->blockdatabs) {
+lib_tc.c:    if (NULL == config->blockdatabs) {
+lib_tc.c:        bin_write_dbdata(dbu, config->nexthash, config->hashlen, (unsigned char *) &nextoffset,
+lib_tc.c:    if ( config->transactions ) {
+lib_tc.c:       if (NULL != config->blockdatabs) {
+lib_tc.c:    if (NULL != config->blockdatabs) {
+lib_tc.c:        if (NULL == config->blockdatabs) {
+lib_tc.c:            free(config->nexthash);
+lib_tc.c:    if (config->encryptmeta && config->encryptdata) {
+lib_tc.c:    if (config->encryptmeta && config->encryptdata) {
+lib_tc.c:    if (config->encryptmeta && config->encryptdata) {
+lib_tc.c:        hashstr=as_sprintf("BMW%i",config->hashlen);
+lib_tc.c:        hashstr=as_sprintf("TGR%i",config->hashlen);
+lib_tc.c:    if ( config->blockdatabs != NULL ) {
+lib_tc.c:    if (config->encryptdata) {
+lib_tc.c:        stiger=sha_binhash(config->passwd, strlen((char *) config->passwd));
+lib_tc.c:        binhash(config->passwd, strlen((char *) config->passwd), res);
+lib_tc.c:        memcpy(&crypto.passwd, stiger, config->hashlen);
+lib_tc.c:        memcpy(&crypto.iv, config->iv, 8);
+lib_tc.c:    if (NULL == config->blockdatabs) {
+lib_tc.c:        blockdatadir = s_dirname(config->blockdata);
+lib_tc.c:        stat(config->blockdata, &stbuf);
+lib_tc.c:    decrypted = search_memhash(dbdtaq, stiger, config->hashlen);
+lib_tc.c:        decrypted = search_dbdata(dbdta, stiger, config->hashlen);
+lib_tc.c:        data = search_dbdata(dbdta, stiger, config->hashlen);
+lib_tc.c:                if (0 == memcmp(dtiger, stiger, config->hashlen)) {
+lib_tc.c:            if (config->encryptdata) {
+lib_tc.c:        tcmdbout(dbum, stiger, config->hashlen);
+lib_tc.c:        tchdbout(dbu, stiger, config->hashlen);
+lib_tc.c:    data = search_memhash(dbum, tigerstr, config->hashlen);
+lib_tc.c:        data = search_dbdata(dbu, tigerstr, config->hashlen);
+lib_tc.c:        mbin_write_dbdata(dbum, hashdata, config->hashlen, (unsigned char *) &inuse,
+lib_tc.c:                       config->hashlen);
+lib_tc.c:    if ( 0 == config->relax ) tcbdbsync(db);
+lib_tc.c:    if ( 0 == config->relax ) tcbdbsync(db);
+lib_tc.c:    if ( 0 == config->relax ) tcbdbsync(db);
+lib_tc.c:    if ( 0 == config->relax ) tcbdbsync(db);
+lib_tc.c:    if ( 0 == config->relax ) tcbdbsync(db);
+lib_tc.c:    mbin_write_dbdata(dbdtaq, stiger, config->hashlen, data->data, data->size);
+lib_tc.c:    if (memddstat->updated > config->cachesize) {
+lib_tc.c:    if (!tchdbout(dbdta, chksum, config->hashlen)) {
+lib_tc.c:        if (!tcmdbout(dbdtaq, chksum, config->hashlen)) {
+lib_tc.c:                if (0 == memcmp(dtiger, chksum, config->hashlen)) {
+lib_tc.c:                if (NULL != config->blockdatabs) {
+lib_tc.c:                if (NULL != config->blockdatabs) {
+lib_tc.c:        data = search_memhash(dbdtaq, chksum, config->hashlen);
+lib_tc.c:            encrypted = search_dbdata(dbdta, chksum, config->hashlen);
+lib_tc.c:            data = search_dbdata(dbdta, chksum, config->hashlen);
+lib_tc.c:                    if (0 == memcmp(dtiger, chksum, config->hashlen)) {
+lib_tc.c:                if (config->encryptdata) {
+lib_tc.c:                data->size = config->hashlen;
+lib_tc.c:                memcpy(data->data,&hashval,config->hashlen);
+lib_tc.c:                data->data=s_malloc(config->hashlen);
+lib_tc.c:                memcpy(data->data,&res,config->hashlen);
+lib_tc.c:                delete_key(dbdta, stiger, config->hashlen);
+lib_tc.c:    data = search_memhash(dbdtaq, stiger, config->hashlen);
+lib_tc.c:    if (config->encryptdata){
+lib_tc.c:      encrypted=search_dbdata(dbdta, stiger, config->hashlen);
+lib_tc.c:    } else data = search_dbdata(dbdta, stiger, config->hashlen);
+lib_tc.c:       data = search_dbdata(dbdta, stiger, config->hashlen);
+lib_tc.c:        if (config->encryptdata) {
+lib_tc.c:    if (NULL != config->blockdatabs) {
+lib_tc.c:        if (NULL != config->blockdatabs) {
+lib_tc.c:            if (NULL != config->blockdatabs) {
+lib_tc.c:    config->blockdata = read_val("BLOCKDATA_PATH");
+lib_tc.c:        config->blockdata_io_type = "tokyocabinet";
+lib_tc.c:        config->blockdatabs = read_val("BLOCKDATA_BS");
+lib_tc.c:            config->blockdata_io_type = "file_io";
+lib_tc.c:            config->blockdatabs = NULL;
+lib_tc.c:            config->freelist = read_val("FREELIST_PATH");
+lib_tc.c:            config->freelistbs = read_val("FREELIST_BS");
+lib_tc.c:            config->blockdatabs = read_val("BLOCKDATA_BS");
+lib_tc.c:        config->transactions = 0;
+lib_tc.c:            config->transactions = 1;
+lib_tc.c:            config->transactions = 0;
+lib_tc.c:    config->blockusage = read_val("BLOCKUSAGE_PATH");
+lib_tc.c:    config->blockusagebs = read_val("BLOCKUSAGE_BS");
+lib_tc.c:    config->dirent = read_val("DIRENT_PATH");
+lib_tc.c:    config->direntbs = read_val("DIRENT_BS");
+lib_tc.c:    config->fileblock = read_val("FILEBLOCK_PATH");
+lib_tc.c:    config->fileblockbs = read_val("FILEBLOCK_BS");
+lib_tc.c:    config->meta = read_val("META_PATH");
+lib_tc.c:    config->metabs = read_val("META_BS");
+lib_tc.c:    config->hardlink = read_val("HARDLINK_PATH");
+lib_tc.c:    config->hardlinkbs = read_val("HARDLINK_BS");
+lib_tc.c:    config->symlink = read_val("SYMLINK_PATH");
+lib_tc.c:    config->symlinkbs = read_val("SYMLINK_BS");
+lib_tc.c:    config->encryptdata = 0;
+lib_tc.c:    config->encryptmeta = 1;
+lib_tc.c:    config->hashlen = 24;
+lib_tc.c:           config->hashlen=atoi(iv);
+lib_tc.c:    LINFO("Lessfs uses a %i bytes long hash.", config->hashlen);
+lib_tc.c:        config->relax = 0;
+lib_tc.c:        config->relax = atoi(iv);
+lib_tc.c:        if (0 != config->relax) {
+lib_tc.c:        config->inspectdiskinterval = 1;
+lib_tc.c:        config->inspectdiskinterval = atoi(iv);
+lib_tc.c:    config->defrag = 0;
+lib_tc.c:            config->defrag = 1;
+lib_tc.c:    if (config->defrag)
+lib_tc.c:    config->cachesize = (calc * 1024 * 1024) / MAX_FUSE_BLKSIZE;
+lib_tc.c:    config->flushtime = cs;
+lib_tc.c:    LINFO("cache %u data blocks", config->cachesize);
+lib_tc.c:        dbpath = as_sprintf("%s/fileblock.tch", config->fileblock);
+lib_tc.c:                config->encryptdata = 1;
+lib_tc.c:                        config->encryptmeta = 0;
+lib_tc.c:        if (config->encryptdata) {
+lib_tc.c:            if (config->encryptdata) {
+lib_tc.c:                if (NULL == config->blockdatabs) {
+lib_tc.c:               config->passwd =
+lib_tc.c:            } else config->passwd = s_strdup(getenv("PASSWORD"));
+lib_tc.c:            stiger=sha_binhash(config->passwd, strlen((char *) config->passwd));
+lib_tc.c:            binhash(config->passwd, strlen((char *) config->passwd), res);
+lib_tc.c:            config->iv = s_malloc(8);
+lib_tc.c:            memcpy(config->iv, crypto->iv, 8);
+lib_tc.c:            //config->passwd is plain, crypto->passwd is hashed.
+lib_tc.c:    stiger=sha_binhash(config->passwd, strlen((char *) config->passwd));
+lib_tc.c:    binhash(config->passwd, strlen((char *) config->passwd),res);
+lib_tc.c:    if (0 != memcmp(cryptopasswd, stiger, config->hashlen)) {
+lib_tc.c:    tchdbout(dbu,stiger,config->hashlen);
+lib_tc.c:    if ( config->blockdatabs != NULL ) {
+lib_tc.c:    if ( config->blockdatabs != NULL ) {
+lib_tc.c:   dbpath = as_sprintf("%s/fileblock.tch", config->fileblock);
+lib_tc.c:   dbpath = as_sprintf("%s/blockusage.tch", config->blockusage);
+lib_tc.c:   dbpath = as_sprintf("%s/metadata.tcb", config->meta);
+lib_tc.c:   dbpath = as_sprintf("%s/symlink.tch", config->symlink);
+lib_tc.c:   dbpath = as_sprintf("%s/dirent.tcb", config->dirent);
+lib_tc.c:   dbpath = as_sprintf("%s/hardlink.tcb", config->hardlink);
+lib_tc.c:   if (NULL != config->blockdatabs) {
+lib_tc.c:      dbpath = as_sprintf("%s/blockdata.tch", config->blockdata);
+lib_tc.c:      dbpath = as_sprintf("%s/freelist.tcb", config->freelist);
+lib_tc.c:      unlink(config->blockdata);
+lib_tc.c:    if ( NULL == config->blockdatabs) {
+lib_tc.c:       bin_write_dbdata(dbu, config->commithash, config->hashlen, (unsigned char *)&finuse,
+lib_tc.c:       bin_write_dbdata(dbu, config->commithash, config->hashlen, (unsigned char *)&ldate,
+listdb.c:    for (n = 0; n < config->hashlen; n++) {
+listdb.c:        value = tchdbget(dbu, key, config->hashlen, &size);
+listdb.c:        if ( 0 == memcmp(config->nexthash,key,config->hashlen)) {
+listdb.c:           inuse = tchdbget(dbu, key, config->hashlen, &size);
+listdb.c:           inuse = tchdbget(dbu, key, config->hashlen, &size);
+listdb.c:    if ( NULL != config->blockdatabs ) {
+mklessfs.c:    config->encryptdata = 0;
+mklessfs.c:    config->passwd = NULL;
+mklessfs.c:    config->iv = NULL;
+mklessfs.c:    config->iv = s_malloc(8);
+mklessfs.c:    memset(config->iv, 0, 8);
+mklessfs.c:    config->encryptdata = 0;
+mklessfs.c:            config->encryptdata = 1;
+mklessfs.c:        if (config->encryptdata) {
+mklessfs.c:            if (NULL == config->blockdatabs) {
+mklessfs.c:    config->encryptmeta = 1;
+mklessfs.c:    if (config->encryptdata) {
+mklessfs.c:        if (8 != s_read(rnd, config->iv, 8)){
+mklessfs.c:               config->passwd =
+mklessfs.c:               if (0 != strcmp((char *) config->passwd, ckpasswd)) {
+mklessfs.c:            config->passwd = s_strdup(getenv("PASSWORD"));
+mklessfs.c:                config->encryptmeta = 0;
+mklessfs.c:    config->commithash=sha_binhash((unsigned char *)"COMMITSTAMP", strlen("COMMITSTAMP"));
+mklessfs.c:    config->commithash=s_malloc(config->hashlen);
+mklessfs.c:    memcpy(config->commithash,(unsigned char *)&res,config->hashlen);
+mklessfs.c:    if (config->encryptdata) {
+mklessfs.c:        free(config->passwd);
+mklessfs.c:        free(config->iv);

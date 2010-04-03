@@ -1,0 +1,1 @@
+lessfsck-lib_tiger.o: lib_tiger.c

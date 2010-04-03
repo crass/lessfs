@@ -1,0 +1,60 @@
+Binary file lessfs matches
+Binary file lessfs-lessfs.o matches
+lessfs.c:        memcpy(&memddstat->stbuf, &stbuf, sizeof(struct stat));
+lessfs.c:        memddstat->stbuf.st_ctime = thetime;
+lessfs.c:        memddstat->stbuf.st_mtime = thetime;
+lessfs.c:        memddstat->stbuf.st_mode = mode;
+lessfs.c:        memddstat->updated = 1;
+lessfs.c:        memcpy(&memddstat->stbuf, &stbuf, sizeof(struct stat));
+lessfs.c:        memddstat->stbuf.st_ctime = thetime;
+lessfs.c:        memddstat->stbuf.st_mtime = thetime;
+lessfs.c:        memddstat->stbuf.st_uid = uid;
+lessfs.c:        memddstat->stbuf.st_gid = gid;
+lessfs.c:        memddstat->updated = 1;
+lessfs.c:            memcpy(&memddstat->stbuf, &stbuf, sizeof(struct stat));
+lessfs.c:            memcpy(&memddstat->filename, bname, strlen(bname) + 1);
+lessfs.c:            memddstat->blocknr = blocknr;
+lessfs.c:            memddstat->updated = 0;
+lessfs.c:            memddstat->opened = 1;
+lessfs.c:            memddstat->deduplicated = 0;
+lessfs.c:            memddstat->lzo_compressed_size = 0;
+lessfs.c:            LDEBUG("lessfs_open : initial open memddstat->opened = %u",
+lessfs.c:                   memddstat->opened);
+lessfs.c:            memddstat->opened++;
+lessfs.c:                   memddstat->opened);
+lessfs.c:        if (memddstat->opened == 1) {
+lessfs.c:                 path, memddstat->stbuf.st_size,
+lessfs.c:                 memddstat->lzo_compressed_size, memddstat->deduplicated);
+lessfs.c:                 path, memddstat->stbuf.st_size,
+lessfs.c:                 memddstat->lzo_compressed_size, memddstat->deduplicated);
+lessfs.c:                   (float) memddstat->stbuf.st_size /
+lessfs.c:                   memddstat->lzo_compressed_size);
+lessfs.c:            memddstat->opened--;
+lessfs.c:                   memddstat->opened);
+lib_tc.c:    if (memddstat->updated > 0) {
+lib_tc.c:        memcpy(&memddstat->stbuf, stbuf, sizeof(struct stat));
+lib_tc.c:        memddstat->stbuf.st_size = size;
+lib_tc.c:        memddstat->stbuf.st_ctime = thetime;
+lib_tc.c:        memddstat->stbuf.st_mtime = thetime;
+lib_tc.c:        memddstat->updated = 1;
+lib_tc.c:    memddstat->updated++;
+lib_tc.c:    memddstat->lzo_compressed_size =
+lib_tc.c:        memddstat->lzo_compressed_size + compressed;
+lib_tc.c:    memddstat->deduplicated = memddstat->deduplicated + deduplicated;
+lib_tc.c:    memddstat->blocknr = blocknr;
+lib_tc.c:    if ((memddstat->stbuf.st_blocks + addblocks) * 512 <
+lib_tc.c:        memddstat->stbuf.st_size + fsize)
+lib_tc.c:        memddstat->stbuf.st_size) {
+lib_tc.c:            if (memddstat->stbuf.st_size < fsize + offsetblock)
+lib_tc.c:                memddstat->stbuf.st_size = fsize + offsetblock;
+lib_tc.c:            if (memddstat->stbuf.st_size <
+lib_tc.c:                memddstat->stbuf.st_size =
+lib_tc.c:        if (memddstat->stbuf.st_size > (512 * memddstat->stbuf.st_blocks)) {
+lib_tc.c:            memddstat->stbuf.st_blocks =
+lib_tc.c:                memddstat->stbuf.st_blocks + addblocks;
+lib_tc.c:        memddstat->stbuf.st_blocks =
+lib_tc.c:            memddstat->stbuf.st_blocks + addblocks;
+lib_tc.c:    if (memddstat->updated > config->cachesize) {
+lib_tc.c:        memddstat->updated = 0;
+lib_tc.c:    memcpy(&memddstat->stbuf, &stbuf, sizeof(struct stat));
+lib_tc.c:    memddstat->updated = 0;

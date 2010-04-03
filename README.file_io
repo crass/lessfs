@@ -1,0 +1,29 @@
+To use the file_io backend instead of tokyocabinet to store the data
+change lessfs.cfg so that it includes these lines.
+
+Comment these lines out:
+#BLOCKDATA_PATH=/data/dta
+#BLOCKDATA_BS=1048576
+
+Add to lessfs.cfg
+BLOCKDATA_IO_TYPE=file_io
+BLOCKDATA_PATH=/data/dta/blockdata.dta
+# The freelist database is only used
+# with the  file_io backend
+#
+FREELIST_PATH=/data/mta
+FREELIST_BS=1048576
+
+Lessfs will now store the data in the regular file : blockdata.dta
+
+The freelist database is used for keeping track of deleted data
+blocks. When a file is deleted the blocks in blockdata.dta that are
+no longer used will end up in the freelist database. When lessfs
+needs datablocks to store data it will first search in the freelist
+if there is space available. The 'deleted' space will therefore be 
+reused. The data file will never shrink though!
+
+The file_io backend has similar performance as the tokyocabinet
+database. It will outperform the tc backend when very large files are
+stored and the amount of memory is insufficient to have enough tc buffers.
+BLOCKDATA_PATH may point to a raw device although this is not recommended (yet).

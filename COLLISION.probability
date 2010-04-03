@@ -1,0 +1,13 @@
+The tiger hash that is used is 192 bits long.
+No known hash collisions exist as far as I know for the full hash.
+
+2^192 = 6277101735386680763835789423207666416102355444464034512896
+Lets say that we want to store 1024 PB of data.
+1024PB = 10^18
+10^18 = 1000000000000000000
+
+The chance that the the hash collides with a 4k blocksize is:
+1000000000000000000/4096 = 244140625000000 blocks
+This is : 1:25711008708143844408671393477458
+
+Compare the number above with the risk of dying in an airplane crash : 1 in 10 million at best.

@@ -1,0 +1,64 @@
+#!/bin/sh
+#
+# lessfs This script starts and stops the spamd daemon
+#
+# chkconfig: - 78 30
+# processname: lessfs
+# description: lessfs a deduplicating filesystem
+
+# Source function library.
+. /etc/rc.d/init.d/functions
+
+prog="lessfs"
+
+# Source networking configuration.
+. /etc/sysconfig/network
+
+# Check that networking is up.
+[ ${NETWORKING} = "no" ] && exit 0
+
+PATH=$PATH:/usr/bin
+MKLESSFS=/usr/bin/mklessfs
+MOUNTPOINT=/fuse
+#LESSFS_OPTS="/etc/lessfs.cfg $MOUNTPOINT  -o kernel_cache,negative_timeout=0,entry_timeout=0,attr_timeout=0,use_ino,readdir_ino,default_permissions,allow_other,big_writes,max_read=4096,max_write=4096"
+LESSFS_OPTS="/etc/lessfs.cfg $MOUNTPOINT  -o kernel_cache,negative_timeout=0,entry_timeout=0,attr_timeout=0,use_ino,readdir_ino,default_permissions,allow_other,big_writes,max_read=131072,max_write=131072"
+LESSFS=/usr/bin/lessfs
+# By default it's all good
+RETVAL=0
+export DEBUG=0
+
+# See how we were called.
+case "$1" in
+  start)
+	# Start daemon.
+	echo -n $"Starting $prog: "
+        $LESSFS $LESSFS_OPTS
+	RETVAL=$?
+        echo
+	if [ $RETVAL = 0 ]; then
+		touch /var/lock/subsys/lessfs
+	fi
+        ;;
+  stop)
+        # Stop daemons.
+        echo -n $"Stopping $prog: "
+        umount $MOUNTPOINT
+        RETVAL=$?
+        echo
+	if [ $RETVAL = 0 ]; then
+		rm -f /var/lock/subsys/lessfs
+		rm -f $SPAMD_PID
+	fi
+        ;;
+  restart)
+        $0 stop
+	sleep 3
+        $0 start
+        ;;
+  *)
+	echo "Usage: $0 {start|stop|restart}"
+	RETVAL=1
+	;;
+esac
+
+exit $RETVAL

@@ -1,0 +1,9 @@
+Lessfs now supports two different hashes.
+1. The tiger hash.
+2. Midnight blue wish.
+
+It is now also possible to select the lenght of the hash. A shorter
+hash will increase the speed as well as the risk of a hash collision.
+
+You can select a size between 20 and 32 bytes.
+The size of the full tiger hash (24 bytes, 192 bits) is selected by default.

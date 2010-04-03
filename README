@@ -1,0 +1,10 @@
+lessfs requires tokyocabinet to be installed on the system.
+http://tokyocabinet.sourceforge.net/index.html
+
+On 32bit systems don't forget to configure tokyocabinet with:
+./configure --enable-off64 
+Failure to do so will limit the databases to a 2GB filesize.
+
+If you choose to upgrade from older lessfs release (< lessfs-1.0.4) 
+to lessfs with transaction support then do only use lessfs-1.0.8 or 
+higher with you use the file_io backend.

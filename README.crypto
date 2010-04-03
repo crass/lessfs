@@ -1,0 +1,14 @@
+Lessfs now supports filesystem encryption. To use it openssl must be present on the system.
+Configure lessfs with : ./configure --with-crypto
+
+Change your lessfs.cfg file:
+ENCRYPT_DATA=on
+# ENCRYPT_META on or off, default is off
+# Requires ENCRYPT_DATA=on and is otherwise ignored.
+ENCRYPT_META=on
+
+Type mklessfs /etc/lessfs.cfg.
+mklessfs will now prompt you for a passwd.
+When you mount lessfs you will need to enter the same passwd or lessfs will refuse the mount
+request. The tools defrag_lessfs and listdb will also prompt you for the password when lessfs
+is formatted with encryption.

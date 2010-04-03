@@ -1,0 +1,25 @@
+1 .Why does vmware crash on startup when used with lessfs?
+VMware tries to use shared writable mmap for paging files but it can't 
+detect that it's not always supported.
+Workaround: Set "mainMem.useNamedFile=FALSE" in the .vmx file. 
+It will disable paging files and VMware will work fine, often with much better performance.
+Another workaround is to create a large (sparse) file on lessfs. 
+Format the file with your favorit fs and mount it with -o loop. 
+You can now run your VM deduplicated from this filesystem. 
+
+Another workaround is to use ietd and iscsi as an intermediate protocol.
+
+2. Can I use lessfs with NFS/IETD or SAMBA?
+
+Fuse and kernelspace NFS does not seem to be stable yet. However your mileage may vary.
+You might want to try userspace NFS instead: http://sourceforge.net/projects/unfs3/
+
+Samba and lessfs should work fine.
+
+Ietd and lessfs should also work. You can export an sparse file as ietd disk:
+cd /to/your/lessfs/mount
+dd if=/dev/zero of=ietddata bs=1 count=0 seek=10000M
+# create a 10000M large sparse file
+
+# Add this to your ietd.conf file.
+Lun 0 Path=/fuse/ietddata,Type=fileio

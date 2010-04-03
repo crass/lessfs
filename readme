@@ -1,0 +1,6 @@
+lessfs requires tokyocabinet to be installed on the system.
+http://tokyocabinet.sourceforge.net/index.html
+
+On 32bit systems don't forget to configure tokyocabinet with:
+./configure --enable-off64 
+Failure to do so will limit the databases to a 2GB filesize.
