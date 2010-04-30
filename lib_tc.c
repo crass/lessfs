@@ -3336,7 +3336,7 @@ void cook_cache(char *key, int ksize, CCACHEDTA *ccachedta)
    inobno=(INOBNO *)key;
    LDEBUG("cook_cache : %llu-%llu",inobno->inode,inobno->blocknr);
 #ifdef SHA3
-   hash=sha_binhash(&ccachedta->data, BLKSIZE);
+   hash=(char *)sha_binhash((unsigned char *)&ccachedta->data, BLKSIZE);
    memcpy(&ccachedta->hash,hash,MAX_HASH_LEN);
    free(hash);
 #else

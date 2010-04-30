@@ -1344,31 +1344,6 @@ void *lessfs_flush(void *arg)
     pthread_exit(NULL);
 }
 
-/*
-// Flush data every flushtime seconds.
-void *lessfs_flush(void *arg)
-{
-    while (1) {
-        sleep(config->flushtime);
-        LDEBUG("lessfs_flush: flush_dta_queue");
-        get_global_lock();
-        flush_dta_queue();
-        if ( config->relax > 0 ) {
-           tcbdbsync(dbdirent);
-           tcbdbsync(dbl);
-           tchdbsync(dbp);
-           tchdbsync(dbs);
-           if ( config->blockdatabs == NULL ) {
-              tcbdbsync(freelist);
-           }
-        }
-        release_global_lock();
-    }
-    pthread_exit(NULL);
-}
-*/
-
-
 void *init_worker(void *arg)
 {
     int count;
