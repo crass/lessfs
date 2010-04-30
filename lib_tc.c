@@ -3254,7 +3254,13 @@ void flush_wait(unsigned long long inode)
           ccachedta=(CCACHEDTA *)p;
           inobno=(INOBNO *)key;
           if ( inode == inobno->inode ) {
-             cook_cache(key, size, ccachedta);
+             if ( ccachedta->pending != 1 ) {
+                cook_cache(key, size, ccachedta);
+             } else {
+                while(ccachedta->pending == 1 ) {
+                   usleep(10);
+                }
+             }
              tctreeout(cachetree,key,size);
              tctreeout(rdtree,key,size);
              free(ccachedta);
