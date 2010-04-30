@@ -87,7 +87,7 @@ int fdbdta = 0;
 unsigned long long nextoffset = 0;
 int written = 0;
 static pthread_mutex_t global_lock_mutex = PTHREAD_MUTEX_INITIALIZER;
-static pthread_mutex_t tiger_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t write_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 #ifdef i386
 #define ITERATIONS 30
@@ -225,7 +225,7 @@ TCHDB *hashdb_open(char *dbpath, int cacherow,
 void tc_defrag()
 {
     start_flush_commit();
-    tiger_lock();
+    write_lock();
     if (!tchdboptimize(dbb, atol(config->fileblockbs), 0, 0, HDBTLARGE))
         LINFO("fileblock.tch not optimized");
     if (!tchdboptimize(dbu, atol(config->blockusagebs), 0, 0, HDBTLARGE))
@@ -249,7 +249,7 @@ void tc_defrag()
         (dbl, 0, 0, atol(config->hardlinkbs), -1, -1, BDBTLARGE))
         LINFO("hardlink.tcb not optimized");
     end_flush_commit();
-    release_tiger_lock();
+    release_write_lock();
 }
 
 void check_datafile_sanity()
@@ -511,18 +511,18 @@ void get_global_lock()
     return;
 }
 
-void tiger_lock()
+void write_lock()
 {
     FUNC;
-    pthread_mutex_lock(&tiger_mutex);
+    pthread_mutex_lock(&write_mutex);
     EFUNC;
     return;
 }
 
-void release_tiger_lock()
+void release_write_lock()
 {
     FUNC;
-    pthread_mutex_unlock(&tiger_mutex);
+    pthread_mutex_unlock(&write_mutex);
     EFUNC;
     return;
 }
@@ -535,10 +535,10 @@ void release_global_lock()
     return;
 }
 
-int try_tiger_lock()
+int try_write_lock()
 {
     int res;
-    res = pthread_mutex_trylock(&tiger_mutex);
+    res = pthread_mutex_trylock(&write_mutex);
     return (res);
 }
 
@@ -993,12 +993,12 @@ unsigned long long readBlock(unsigned long long blocknr,
      inobno.inode=inode;
      inobno.blocknr=blocknr;
 
-     tiger_lock();
+     write_lock();
      cachedata=(char *)tctreeget(rdtree, (void *)&inobno, sizeof(INOBNO), &vsize);
      if ( NULL == cachedata ) {
         tdata=check_block_exists(&inobno);
         if (NULL == tdata) { 
-            release_tiger_lock();
+            release_write_lock();
             return (0);
         }
         cdata = search_dbdata(dbdta, tdata->data, tdata->size);
@@ -1030,7 +1030,7 @@ unsigned long long readBlock(unsigned long long blocknr,
            memcpy(&ccachedta->data, blockdata, ret);
            tctreeput(rdtree, (void *)&inobno, sizeof(INOBNO), (void *)&p, sizeof(unsigned long long));
         }
-        release_tiger_lock();
+        release_write_lock();
         return(ret);
 // Fetch the block from disk and put it in the cache.
      }
@@ -1039,7 +1039,7 @@ unsigned long long readBlock(unsigned long long blocknr,
      ccachedta->creationtime=time(NULL); 
      memcpy(blockdata, &ccachedta->data, BLKSIZE);
      ret = BLKSIZE;
-     release_tiger_lock();
+     release_write_lock();
      return (ret);
 }
 
@@ -1644,8 +1644,7 @@ void *btsearch_keyval(TCBDB * db, void *key, int keylen, void *val,
             if (NULL != val) {
                 if (vallen == size) {
                     if (0 == memcmp(val, dbvalue, size)) {
-                        ret = s_malloc(size + 1);
-                        memset(ret, 0, size + 1);
+                        ret = s_zmalloc(size + 1);
                         memcpy(ret, dbvalue, size);
                         free(dbvalue);
                         free(dbkey);
@@ -1653,8 +1652,7 @@ void *btsearch_keyval(TCBDB * db, void *key, int keylen, void *val,
                     }
                 }
             } else {
-                ret = s_malloc(size + 1);
-                memset(ret, 0, size + 1);
+                ret = s_zmalloc(size + 1);
                 memcpy(ret, dbvalue, size);
                 free(dbvalue);
                 free(dbkey);
@@ -2039,7 +2037,9 @@ void partial_truncate_block(struct stat *stbuf, unsigned long long blocknr,
 #else
         uncompdata = clz_decompress(data->data, data->size);
 #endif
-        memcpy(blockdata, uncompdata->data, offset);
+        if ( uncompdata->size >= offset ) {
+           memcpy(blockdata, uncompdata->data, offset);
+        } else memcpy(blockdata, uncompdata->data, uncompdata->size);
         comprfree(uncompdata);
     } else {
         memcpy(blockdata, data->data, offset);
@@ -3240,6 +3240,30 @@ void flush_abort(unsigned long long inode)
     return;
 }
 
+int wait_pending() 
+{
+  int pending=0;
+  char *key;
+  int size;
+  int vsize;
+  char *val;
+  unsigned long long p;
+  INOBNO *inobno;
+  CCACHEDTA *ccachedta;
+
+  tctreeiterinit(rdtree);
+  while ( NULL != (key=(char *)tctreeiternext(rdtree, &size))){
+     val=(char *)tctreeget(rdtree, (void *)key, size, &vsize);
+     if ( NULL != val ) {
+        memcpy(&p,val,vsize);
+        ccachedta=(CCACHEDTA *)p;
+        inobno=(INOBNO *)key;
+        if ( ccachedta->pending == 1 ) pending=1;
+     }
+  }
+  return pending;
+}
+
 void flush_wait(unsigned long long inode)
 {
    char *key;
@@ -3274,7 +3298,7 @@ void flush_wait(unsigned long long inode)
     return;
 }
 
-// Both tiger_lock and global_lock need to be set.
+// Both write_lock and global_lock need to be set.
 void flush_queue(unsigned long long inode, bool force) {
     char *key;
     int size;
@@ -3372,9 +3396,9 @@ void start_flush_commit()
    unsigned long long lastoffset=0;
    while ( 0 != tctreernum(cachetree)) {
       LDEBUG("Waiting for %llu records to drain",tctreernum(cachetree));
-      tiger_lock();
+      write_lock();
       flush_queue(0,0);
-      release_tiger_lock();
+      release_write_lock();
       usleep(10000);
    }
    if ( config->transactions) lessfs_trans_stamp();

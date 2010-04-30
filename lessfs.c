@@ -251,14 +251,14 @@ static int lessfs_unlink(const char *path)
     int res;
     FUNC;
     get_global_lock();
-    tiger_lock();
+    write_lock();
     if (NULL != config->blockdatabs) {
         res = db_unlink_file(path);
     } else {
         res = file_unlink_file(path);
     }
     if ( config->relax == 0 ) dbsync();
-    release_tiger_lock();
+    release_write_lock();
     release_global_lock();
     EFUNC;
     return res;
@@ -419,8 +419,9 @@ static int lessfs_truncate(const char *path, off_t size)
     }
     LDEBUG("lessfs_truncate : %s truncate from %llu to %llu",path,stbuf->st_size,size);
     /* Flush the blockcache before we continue. */
-    tiger_lock();
     flush_wait(stbuf->st_ino);
+    wait_pending();
+    write_lock();
     if ( size < stbuf->st_size ) {
     //if ( size < stbuf->st_size || size == 0 ) {
        if (NULL != config->blockdatabs) {
@@ -432,7 +433,7 @@ static int lessfs_truncate(const char *path, off_t size)
        LDEBUG("lessfs_truncate : %s only change size to %llu",path,size);
        update_filesize_cache(stbuf,size);
     }
-    release_tiger_lock();
+    release_write_lock();
     free(stbuf);
     free(bname);
     release_global_lock();
@@ -522,9 +523,9 @@ static int lessfs_open(const char *path, struct fuse_file_info *fi)
     } else {
         fi->fh = stbuf.st_ino;
         inode = stbuf.st_ino;
-        tiger_lock();
+        write_lock();
         flush_wait(inode);
-        release_tiger_lock();
+        release_write_lock();
         bname = s_basename((char *) path);
 //  Check if we have already something in cache for this inode
         dataptr =
@@ -584,9 +585,8 @@ static int lessfs_read(const char *path, char *buf, size_t size,
 
     get_global_lock();
 // Change this to creating a buffer that is allocated once.
-    tmpbuf = s_malloc(BLKSIZE + 1);
+    tmpbuf = s_zmalloc(BLKSIZE + 1);
     memset(buf, 0, size);
-    memset(tmpbuf, 0, BLKSIZE + 1);
     LDEBUG("lessfs_read called offset : %llu, size bytes %llu",
            (unsigned long long) offset, (unsigned long long) size);
     while (done < size) {
@@ -705,7 +705,7 @@ void add2cache (INOBNO *inobno, const char *buf, off_t offsetblock, size_t bsize
    update_filesize(inobno->inode, bsize, offsetblock,
                    inobno->blocknr, 0, BLKSIZE, 0);
    FUNC;
-   tiger_lock();
+   write_lock();
    key=(char *)tctreeget(rdtree, (void *)inobno, sizeof(INOBNO), &size);
    if ( NULL != key ) {
      LDEBUG("Found %llu-%llu in rdtree",inobno->inode,inobno->blocknr);
@@ -719,7 +719,7 @@ void add2cache (INOBNO *inobno, const char *buf, off_t offsetblock, size_t bsize
      ccachedta->pending=0;
      LDEBUG("Set ccachedta->dirty=1 for %llu-%llu",inobno->inode,inobno->blocknr);
      memcpy((void *)&ccachedta->data[offsetblock],buf,bsize);
-     release_tiger_lock();
+     release_write_lock();
      EFUNC;
      return;
    }
@@ -748,7 +748,7 @@ void add2cache (INOBNO *inobno, const char *buf, off_t offsetblock, size_t bsize
 // When this is not a full block a separate thread is used.
    LDEBUG("Write %llu-%llu to rdtree",inobno->inode,inobno->blocknr);
    tctreeput(rdtree, (void *)inobno, sizeof(INOBNO), (void *)&p, sizeof(unsigned long long));
-   release_tiger_lock();
+   release_write_lock();
    EFUNC;
    return;
 }
@@ -815,9 +815,9 @@ static int lessfs_release(const char *path, struct fuse_file_info *fi)
     FUNC;
 // Finish pending i/o for this inode.
     get_global_lock();
-    tiger_lock();
+    write_lock();
     flush_wait(fi->fh);
-    release_tiger_lock();
+    release_write_lock();
     dataptr = search_memhash(dbcache, &fi->fh, sizeof(unsigned long long));
     if (dataptr != NULL) {
         memddstat = (MEMDDSTAT *) dataptr->data;
@@ -867,9 +867,9 @@ static int lessfs_fsync(const char *path, int isdatasync,
     (void) path;
     (void) isdatasync;
     get_global_lock();
-    tiger_lock();
+    write_lock();
     flush_wait(fi->fh);
-    release_tiger_lock();
+    release_write_lock();
     /* Living on the edge, wait for pending I/O but do not flush the caches. */
     if (config->relax < 2) {
         update_filesize_onclose(fi->fh);
@@ -975,9 +975,9 @@ void *queue_gard(void *arg)
            config->cachesize/2 < tctreernum(cachetree)*sizeof(CCACHEDTA)){
          LDEBUG("queue_gard : force to drain the cache");
          get_global_lock();
-         tiger_lock();
+         write_lock();
          flush_queue(0, 1); 
-         release_tiger_lock();
+         release_write_lock();
          release_global_lock();
       }
    }
@@ -1116,17 +1116,17 @@ void show_lock_status(int csocket)
          strlen
          ("global_lock : 0 (not set)\n"));
    }
-   if ( 0 != try_tiger_lock()) {
+   if ( 0 != try_write_lock()) {
       timeoutWrite(3, csocket,
-      "tiger_lock : 1 (set)\n",
+      "write_lock : 1 (set)\n",
       strlen
-      ("tiger_lock : 1 (set)\n"));
+      ("write_lock : 1 (set)\n"));
    } else {
-      release_tiger_lock();
+      release_write_lock();
       timeoutWrite(3, csocket,
-         "tiger_lock : 0 (not set)\n",
+         "write_lock : 0 (not set)\n",
          strlen
-         ("tiger_lock : 0 (not set)\n"));
+         ("write_lock : 0 (not set)\n"));
    }
    timeoutWrite(3, csocket,
       "---------------------\n",
@@ -1316,7 +1316,7 @@ void *init_worker(void *arg)
            sleep(1);
         } 
         found[count]=0;
-        tiger_lock();
+        write_lock();
         tctreeiterinit(cachetree);
         if ( NULL != (key=(char *)tctreeiternext(cachetree, &size))){
            a=(char *)tctreeget(cachetree, (void *)key, size, &vsize);
@@ -1329,13 +1329,13 @@ void *init_worker(void *arg)
               tctreeout(cachetree,key,size);
               found[count]++;
               ccachedta->pending=1;
-              release_tiger_lock();
+              release_write_lock();
               cook_cache(dupkey,size,ccachedta); 
               LDEBUG("Write %llu-%llu done get lock and delete cache",inobno[count]->inode,inobno[count]->blocknr);
               free(dupkey);
            } 
         }
-        if ( 0 == found[count]) release_tiger_lock(); 
+        if ( 0 == found[count]) release_write_lock(); 
     }
     LFATAL("Thread %u exits",count);
     pthread_exit(NULL);
