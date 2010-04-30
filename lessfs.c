@@ -1196,7 +1196,7 @@ void *ioctl_worker(void *arg)
                     result = "All i/o is now suspended.";
                     err = 0;
                     get_global_lock();
-                    dbsync();
+                    start_flush_commit();
                     isfrozen = 1;
                 } else {
                     result = "i/o is already suspended.";
@@ -1207,6 +1207,7 @@ void *ioctl_worker(void *arg)
                 if (1 == isfrozen) {
                     result = "Resuming i/o.";
                     err = 0;
+                    end_flush_commit();
                     release_global_lock();
                     isfrozen = 0;
                 } else {
@@ -1275,70 +1276,15 @@ void *ioctl_worker(void *arg)
     return NULL;
 }
 
-
 // Flush data every flushtime seconds.
 void *lessfs_flush(void *arg)
 {
-    unsigned long long lastoffset=0;
-
     while (1) {
         sleep(config->flushtime);
         LDEBUG("lessfs_flush: flush_dta_queue");
         get_global_lock();
-        while ( 0 != tctreernum(cachetree)) {
-           LDEBUG("Waiting for %llu records to drain",tctreernum(cachetree));
-           tiger_lock();
-           flush_queue(0,0);
-           release_tiger_lock();
-           usleep(10000);
-        }
-        if ( config->transactions) lessfs_trans_stamp(); 
-        if (NULL == config->blockdatabs) {
-           if ( lastoffset != nextoffset) {
-              LDEBUG("write nextoffset=%llu",nextoffset);
-              bin_write_dbdata(dbu, config->nexthash, config->hashlen, (unsigned char *) &nextoffset,
-                               sizeof(unsigned long long));
-              lastoffset=nextoffset;
-           }
-        }
-        sync_all_filesizes();
-        if ( config->blockdatabs != NULL ) {
-            if ( config->transactions ) if ( !tchdbtrancommit(dbdta)) die_dataerr("IO error, unable to commit dbdta transaction");
-        } else {
-            fsync(fdbdta);
-            if ( config->transactions ) if ( !tcbdbtrancommit(freelist)) die_dataerr("IO error, unable to commit freelist transaction");
-        }
-        
-        if ( config->transactions ) {
-           if ( !tchdbtrancommit(dbu) ) die_dataerr("IO error, unable to commit blockusage transaction");
-           if ( !tchdbtrancommit(dbb) ) die_dataerr("IO error, unable to commit fileblock transaction");
-           if ( !tchdbtrancommit(dbp) ) die_dataerr("IO error, unable to commit metadata transaction");
-           if ( !tchdbtrancommit(dbs) ) die_dataerr("IO error, unable to commit symlink transaction");
-           if ( !tcbdbtrancommit(dbdirent)) die_dataerr("IO error, unable to commit dirent transaction");
-           if ( !tcbdbtrancommit(dbl)) die_dataerr("IO error, unable to commit hardlink transaction");
-        }
-        /* Make sure that the meta data is updated every once in a while */
-        tcbdbsync(dbdirent);
-        tcbdbsync(dbl);
-        tchdbsync(dbp);
-        tchdbsync(dbs);
-        if ( config->blockdatabs == NULL ) {
-           tcbdbsync(freelist);
-        }else tchdbsync(dbdta);
-        tchdbsync(dbu);
-        tchdbsync(dbb);
-
-        if ( config->transactions ) {
-           if ( config->blockdatabs != NULL ){
-               tchdbtranbegin(dbdta);
-           } else tcbdbtranbegin(freelist);
-           tchdbtranbegin(dbu);
-           tchdbtranbegin(dbb);
-           tchdbtranbegin(dbp);
-           tchdbtranbegin(dbs);
-           tcbdbtranbegin(dbdirent);
-           tcbdbtranbegin(dbl);
-        }
+        start_flush_commit();
+        end_flush_commit();
         release_global_lock();
     }
     pthread_exit(NULL);

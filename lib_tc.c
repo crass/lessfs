@@ -224,6 +224,8 @@ TCHDB *hashdb_open(char *dbpath, int cacherow,
 
 void tc_defrag()
 {
+    start_flush_commit();
+    tiger_lock();
     if (!tchdboptimize(dbb, atol(config->fileblockbs), 0, 0, HDBTLARGE))
         LINFO("fileblock.tch not optimized");
     if (!tchdboptimize(dbu, atol(config->blockusagebs), 0, 0, HDBTLARGE))
@@ -246,6 +248,8 @@ void tc_defrag()
     if (!tcbdboptimize
         (dbl, 0, 0, atol(config->hardlinkbs), -1, -1, BDBTLARGE))
         LINFO("hardlink.tcb not optimized");
+    end_flush_commit();
+    release_tiger_lock();
 }
 
 void check_datafile_sanity()
@@ -3361,5 +3365,65 @@ void cook_cache(char *key, int ksize, CCACHEDTA *ccachedta)
    ccachedta->pending=0;
    LDEBUG("cook_cache : %llu-%llu evicted from cache",inobno->inode,inobno->blocknr);
    return;
+}
+
+void start_flush_commit()
+{
+   unsigned long long lastoffset=0;
+   while ( 0 != tctreernum(cachetree)) {
+      LDEBUG("Waiting for %llu records to drain",tctreernum(cachetree));
+      tiger_lock();
+      flush_queue(0,0);
+      release_tiger_lock();
+      usleep(10000);
+   }
+   if ( config->transactions) lessfs_trans_stamp();
+   if (NULL == config->blockdatabs) {
+      if ( lastoffset != nextoffset) {
+         LDEBUG("write nextoffset=%llu",nextoffset);
+         bin_write_dbdata(dbu, config->nexthash, config->hashlen, (unsigned char *) &nextoffset,
+                          sizeof(unsigned long long));
+         lastoffset=nextoffset;
+      }
+   }
+   sync_all_filesizes();
+   if ( config->blockdatabs != NULL ) {
+            if ( config->transactions ) if ( !tchdbtrancommit(dbdta)) die_dataerr("IO error, unable to commit dbdta transaction");
+   } else {
+       fsync(fdbdta);
+       if ( config->transactions ) if ( !tcbdbtrancommit(freelist)) die_dataerr("IO error, unable to commit freelist transaction");
+   }
+    if ( config->transactions ) {
+      if ( !tchdbtrancommit(dbu) ) die_dataerr("IO error, unable to commit blockusage transaction");
+      if ( !tchdbtrancommit(dbb) ) die_dataerr("IO error, unable to commit fileblock transaction");
+      if ( !tchdbtrancommit(dbp) ) die_dataerr("IO error, unable to commit metadata transaction");
+      if ( !tchdbtrancommit(dbs) ) die_dataerr("IO error, unable to commit symlink transaction");
+      if ( !tcbdbtrancommit(dbdirent)) die_dataerr("IO error, unable to commit dirent transaction");
+      if ( !tcbdbtrancommit(dbl)) die_dataerr("IO error, unable to commit hardlink transaction");
+   }
+   /* Make sure that the meta data is updated every once in a while */
+   tcbdbsync(dbdirent);
+   tcbdbsync(dbl);
+   tchdbsync(dbp);
+   tchdbsync(dbs);
+}
+
+void end_flush_commit() {
+   if ( config->blockdatabs == NULL ) {
+      tcbdbsync(freelist);
+   }else tchdbsync(dbdta);
+   tchdbsync(dbu);
+   tchdbsync(dbb);
+   if ( config->transactions ) {
+      if ( config->blockdatabs != NULL ){
+          tchdbtranbegin(dbdta);
+      } else tcbdbtranbegin(freelist);
+      tchdbtranbegin(dbu);
+      tchdbtranbegin(dbb);
+      tchdbtranbegin(dbp);
+      tchdbtranbegin(dbs);
+      tcbdbtranbegin(dbdirent);
+      tcbdbtranbegin(dbl);
+   }
 }
 
