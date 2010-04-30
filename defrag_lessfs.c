@@ -58,7 +58,6 @@ int main(int argc, char *argv[])
         usage(argv[0]);
 
     parseconfig(0);
-    pthread_spin_init(&moddb_spinlock, 0);
     tc_defrag();
     tc_close(1);
     sync();

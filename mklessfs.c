@@ -178,19 +178,13 @@ int main(int argc, char *argv[])
         }
     }
 #endif
-    pthread_spin_init(&dbu_spinlock, 0);
 #ifdef SHA3
     config->commithash=sha_binhash((unsigned char *)"COMMITSTAMP", strlen("COMMITSTAMP"));
-    config->cursnaphash=sha_binhash((unsigned char *)"CURRENTSNAPSHOT", strlen("CURRENTSNAPSHOT"));
 #else
     binhash((unsigned char *)"COMMITSTAMP", strlen("COMMITSTAMP"), res);
     config->commithash=s_malloc(config->hashlen);
     memcpy(config->commithash,(unsigned char *)&res,config->hashlen);
-    binhash((unsigned char *)"CURRENTSNAPSHOT", strlen("CURRENTSNAPSHOT"), res);
-    config->cursnaphash=s_malloc(config->hashlen);
-    memcpy(config->cursnaphash,(unsigned char *)&res,config->hashlen);
 #endif
-    config->cursnap=0;
     formatfs();
     sync();
 #ifdef ENABLE_CRYPTO

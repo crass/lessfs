@@ -100,9 +100,6 @@ void segvExit()
 void normalExit()
 {
     LFATAL("Exit signal received, exitting\n");
-    sync_flush_dtaq();
-    sync_flush_dbu();
-    sync_flush_dbb();
     tc_close(0);
     exit(EXIT_OK);
 }
@@ -171,21 +168,12 @@ static int lessfs_getattr(const char *path, struct stat *stbuf)
     if (res == -ENAMETOOLONG)
         return (res);
 
-    open_lock();
-getattrwait:
     get_global_lock();
-    for (c = 0; c < max_threads; c++) {
-        if (tdta[c]->inode != 0 ) {
-            release_global_lock();
-            goto getattrwait;
-        }
-    }
     res = dbstat(path, stbuf);
     LDEBUG("lessfs_getattr : st_nlinks=%u", stbuf->st_nlink);
     LDEBUG("lessfs_getattr : %s size %llu : result %i",path,
            (unsigned long long) stbuf->st_size, res);
     release_global_lock();
-    release_open_lock();
     return (res);
 }
 
@@ -263,15 +251,14 @@ static int lessfs_unlink(const char *path)
     int res;
     FUNC;
     get_global_lock();
-    sync_flush_dtaq();
-    sync_flush_dbu();
-    sync_flush_dbb();
+    tiger_lock();
     if (NULL != config->blockdatabs) {
         res = db_unlink_file(path);
     } else {
         res = file_unlink_file(path);
     }
     if ( config->relax == 0 ) dbsync();
+    release_tiger_lock();
     release_global_lock();
     EFUNC;
     return res;
@@ -417,26 +404,25 @@ static int lessfs_truncate(const char *path, off_t size)
     struct stat *stbuf;
     char *bname;
     DBT *data;
-
-    tiger_lock();
+ 
     get_global_lock();
     bname = s_basename((char *) path);
     stbuf = s_malloc(sizeof(struct stat));
     res = dbstat(path, stbuf);
-    if (res != 0)
+    if (res != 0) {
+        release_global_lock();
         return (res);
+    }
     if (S_ISDIR(stbuf->st_mode)) {
+        release_global_lock();
         return (-EISDIR);
     }
     LDEBUG("lessfs_truncate : %s truncate from %llu to %llu",path,stbuf->st_size,size);
     /* Flush the blockcache before we continue. */
-    data = try_block_cache(stbuf->st_ino, 0, 1);
-    if (data != NULL) die_syserr(); 
-    release_global_lock();
-    wait_io_pending(stbuf->st_ino);
-    sync_flush_dtaq();
-
-    if ( size < stbuf->st_size || size == 0 ) {
+    tiger_lock();
+    flush_wait(stbuf->st_ino);
+    if ( size < stbuf->st_size ) {
+    //if ( size < stbuf->st_size || size == 0 ) {
        if (NULL != config->blockdatabs) {
            res = db_fs_truncate(stbuf, size, bname);
        } else {
@@ -446,10 +432,10 @@ static int lessfs_truncate(const char *path, off_t size)
        LDEBUG("lessfs_truncate : %s only change size to %llu",path,size);
        update_filesize_cache(stbuf,size);
     }
+    release_tiger_lock();
     free(stbuf);
     free(bname);
     release_global_lock();
-    release_tiger_lock();
     return (res);
 }
 
@@ -526,10 +512,8 @@ static int lessfs_open(const char *path, struct fuse_file_info *fi)
     LDEBUG("lessfs_open : %s strlen %i : uid %u", path,
            strlen((char *) path), fuse_get_context()->uid);
 
-    open_lock();
     get_global_lock();
     res = dbstat(path, &stbuf);
-    release_global_lock();
     if (res == -ENOENT) {
         fi->fh = 0;
         stbuf.st_mode = fi->flags;
@@ -538,7 +522,9 @@ static int lessfs_open(const char *path, struct fuse_file_info *fi)
     } else {
         fi->fh = stbuf.st_ino;
         inode = stbuf.st_ino;
-        wait_io_pending(inode);
+        tiger_lock();
+        flush_wait(inode);
+        release_tiger_lock();
         bname = s_basename((char *) path);
 //  Check if we have already something in cache for this inode
         dataptr =
@@ -578,9 +564,9 @@ static int lessfs_open(const char *path, struct fuse_file_info *fi)
             DBTfree(dataptr);
         }
         free(bname);
-        release_global_lock();
     }
-    release_open_lock();
+    release_global_lock();
+    EFUNC;
     return (res);
 }
 
@@ -608,7 +594,7 @@ static int lessfs_read(const char *path, char *buf, size_t size,
         LDEBUG("blocknr to read :%llu", (unsigned long long) blocknr);
         block_offset = (done + offset) - (blocknr * BLKSIZE);
         if (NULL != config->blockdatabs) {
-            got = readBlock(blocknr, path, tmpbuf, fi->fh);
+            got = readBlock(blocknr, path, tmpbuf, fi->fh, size-done);
             LDEBUG("readBlock : %llu-%llu returns %i bytes",fi->fh,blocknr,got);
         } else
             got = file_read_block(blocknr, path, tmpbuf, fi->fh);
@@ -641,99 +627,165 @@ static int lessfs_read(const char *path, char *buf, size_t size,
     return (done);
 }
 
+CCACHEDTA *update_stored(char *hash, INOBNO *inobno, off_t offsetblock)
+{
+   DBT *encrypted;
+   DBT *data;
+   unsigned char *dbdata;
+   compr *uncompdata;
+   CCACHEDTA *ccachedta;
+   unsigned long long inuse;
+
+   ccachedta=s_zmalloc(sizeof(CCACHEDTA));
+   ccachedta->creationtime=time(NULL);
+   ccachedta->dirty=1;
+   ccachedta->pending=0;
+
+#ifdef ENABLE_CRYPTO
+   encrypted = search_dbdata(dbdta, hash, config->hashlen);
+   if (NULL == encrypted) {
+#else
+   data = search_dbdata(dbdta, hash, config->hashlen);
+   if (NULL == data) {
+#endif
+
+#ifndef ENABLE_CRYPTO
+   }
+#else
+   } else {
+      if (config->encryptdata) {
+         data = decrypt(encrypted);
+         DBTfree(encrypted);
+      } else
+         data = encrypted;
+   }
+#endif
+   if (data->size < BLKSIZE) {
+#ifdef LZO
+      uncompdata = lzo_decompress(data->data, data->size);
+#else
+      LDEBUG("uncomp data");
+      uncompdata = clz_decompress(data->data, data->size);
+      LDEBUG("done uncomp data");
+#endif
+      LDEBUG("got uncompsize : %lu", uncompdata->size);
+      memcpy(&ccachedta->data, uncompdata->data, uncompdata->size);
+      comprfree(uncompdata);
+   } else {
+      LDEBUG("Got data->size %lu", data->size);
+      memcpy(&ccachedta->data, data->data, data->size);
+   }
+   DBTfree(data);
+   delete_dbb(inobno);
+   inuse = getInUse(hash);
+   if (inuse <= 1) {
+        delete_inuse(hash);
+        if (!tchdbout(dbdta, hash, config->hashlen)) {
+        loghash
+            ("Failed to delete hash from dbdta",
+             hash);
+        }
+   } else {
+        inuse--;
+        update_inuse(hash, inuse);
+   }
+   EFUNC;
+   return ccachedta;
+}
+
+void add2cache (INOBNO *inobno, const char *buf, off_t offsetblock, size_t bsize )
+{
+   CCACHEDTA *ccachedta;
+   unsigned long long p;
+   int size;
+   char *key;
+   DBT *data=NULL;
+   DBT *rdata;
+
+   update_filesize(inobno->inode, bsize, offsetblock,
+                   inobno->blocknr, 0, BLKSIZE, 0);
+   FUNC;
+   tiger_lock();
+   key=(char *)tctreeget(rdtree, (void *)inobno, sizeof(INOBNO), &size);
+   if ( NULL != key ) {
+     LDEBUG("Found %llu-%llu in rdtree",inobno->inode,inobno->blocknr);
+     memcpy(&p,key,size);
+     ccachedta=(CCACHEDTA *)p;
+     ccachedta->creationtime=time(NULL);
+     while(ccachedta->pending == 1 ) {
+         LFATAL("Wait on pending");
+     }
+     ccachedta->dirty=1;
+     ccachedta->pending=0;
+     LDEBUG("Set ccachedta->dirty=1 for %llu-%llu",inobno->inode,inobno->blocknr);
+     memcpy((void *)&ccachedta->data[offsetblock],buf,bsize);
+     release_tiger_lock();
+     EFUNC;
+     return;
+   }
+
+   if ( bsize < BLKSIZE ) {
+      data=check_block_exists(inobno); 
+      if ( NULL != data ) {
+         ccachedta=update_stored(data->data, inobno, offsetblock);
+         memcpy(&ccachedta->data[offsetblock],buf,bsize);
+         DBTfree(data);
+      }
+   } 
+   if ( NULL == data ) {
+      ccachedta=s_zmalloc(sizeof(CCACHEDTA));
+      memcpy(&ccachedta->data[offsetblock],buf,bsize);
+      ccachedta->creationtime=time(NULL);
+      ccachedta->dirty=1;
+      ccachedta->pending=0;
+   }
+   p=(unsigned long long)ccachedta;
+// A full block can be processed right away.
+   if ( bsize == BLKSIZE ) {
+      LDEBUG("Write %llu-%llu to cachetree",inobno->inode,inobno->blocknr);
+      tctreeput(cachetree, (void *)inobno, sizeof(INOBNO), (void *)&p, sizeof(unsigned long long));
+   }
+// When this is not a full block a separate thread is used.
+   LDEBUG("Write %llu-%llu to rdtree",inobno->inode,inobno->blocknr);
+   tctreeput(rdtree, (void *)inobno, sizeof(INOBNO), (void *)&p, sizeof(unsigned long long));
+   release_tiger_lock();
+   EFUNC;
+   return;
+}
+
 static int lessfs_write(const char *path, const char *buf, size_t size,
                         off_t offset, struct fuse_file_info *fi)
 {
-    unsigned long long blocknr;
-    unsigned int offsetblock;
+    off_t offsetblock;
     DBT *blocktiger;
     DBT *data;
     size_t bsize;
     size_t done = 0;
     int res;
     INOBNO inobno;
+    int count=0;
 
     FUNC;
-    tiger_lock();
-    bsize = size;
-    blocknr = offset / BLKSIZE;
 
-    offsetblock = offset - (blocknr * BLKSIZE);
-    if ((offsetblock + bsize) > BLKSIZE) {
-        bsize = BLKSIZE - offsetblock;
-    }
-    blkdta->inode = fi->fh;
+    get_global_lock();
+    LDEBUG("lessfs_write offset %llu size %lu", offset, (unsigned long)size);
     inobno.inode = fi->fh;
-    LDEBUG("lessfs_write : %s - %llu-%llu size %llu offset %u",path,inobno.inode,blocknr,(unsigned long long)size,offsetblock);
-  wagain:
-    inobno.blocknr = blocknr;
-/*  When I/O for this inode - blocknr is pending this operation will be an update */
-    wait_inode_block_pending(inobno.inode, inobno.blocknr);
-    memset((char *) blkdta->blockdata, 0, BLKSIZE);
-    LDEBUG("lessfs_write -> try_block_cache : inode %llu blocknr %llu",
-           fi->fh, blocknr);
-    data = try_block_cache(inobno.inode, inobno.blocknr, 2);
-    if (NULL != data) {
-
-        memcpy((char *) blkdta->blockdata, data->data, data->size);
-        memcpy((char *) blkdta->blockdata + offsetblock, buf + done,
-               bsize);
-        add_blk_to_cache(inobno.inode, inobno.blocknr,
-                         (unsigned char *) blkdta->blockdata);
-        update_filesize(inobno.inode, bsize, offsetblock, blocknr, 0, 0,
-                        0);
-        DBTfree(data);
-        res = 2;
-    } else
-        res = 0;
-    if (2 != res) {
-        blocktiger = check_block_exists(inobno);
-        if (NULL != blocktiger) {
-            LDEBUG
-                ("lessfs_write -> update_block : inode %llu blocknr %llu",
-                 fi->fh, blocknr);
-            if (NULL != config->blockdatabs) {
-                db_update_block(buf + done, blocknr, offsetblock, bsize,
-                                blkdta->inode, blocktiger->data);
-            } else {
-                file_update_block(buf + done, blocknr, offsetblock, bsize,
-                                  blkdta->inode, blocktiger->data);
-            }
-            DBTfree(blocktiger);
-            release_global_lock();
-        } else {
-            LDEBUG
-                ("lessfs_write -> add_block : inode %llu blocknr %llu",
-                 fi->fh, blocknr);
-            blkdta->blocknr = blocknr;
-            blkdta->offsetblock = offsetblock;
-            blkdta->bsize = bsize;
-            blkdta->buf=(unsigned char *)buf+done;
-            if (1 == res) {
-                blkdta->sparse = 1;
-            } else {
-                blkdta->sparse = 0;
-            }
-            LDEBUG
-                ("lessfs_write -> add_block : sparse = %i",
-                  blkdta->sparse);
-            release_worker_lock();
-            release_global_lock();
-            write_lock();
-        }
-    } else
-        release_global_lock();
-    done = done + bsize;
-    bsize = size - done;
-    if (done < size) {
-        blocknr++;
-        offsetblock = 0;
-        goto wagain;
+    while ( 1 )
+    {
+        inobno.blocknr = ( offset + done ) / BLKSIZE;
+        offsetblock = offset + done - (inobno.blocknr * BLKSIZE);
+        bsize = size-done;
+        if ( bsize + offsetblock > BLKSIZE ) bsize=BLKSIZE-offsetblock;
+        //Just put it in cache. We might need to fetch the block.
+        //This is done by add2cache.
+        add2cache(&inobno, buf+done,offsetblock,bsize);
+        done=done+bsize;
+        bsize=size-done;
+        if ( done >= size ) break;
     }
-    release_tiger_lock();
-    LDEBUG("lessfs_write : inode %llu blocknr %llu", fi->fh, blocknr);
+    release_global_lock();
     EFUNC;
-    return (done);
+    return (size);
 }
 
 static int lessfs_statfs(const char *path, struct statvfs *stbuf)
@@ -762,17 +814,14 @@ static int lessfs_release(const char *path, struct fuse_file_info *fi)
 
     FUNC;
 // Finish pending i/o for this inode.
-    open_lock();
-    wait_io_pending(fi->fh);
+    get_global_lock();
+    tiger_lock();
+    flush_wait(fi->fh);
+    release_tiger_lock();
     dataptr = search_memhash(dbcache, &fi->fh, sizeof(unsigned long long));
     if (dataptr != NULL) {
         memddstat = (MEMDDSTAT *) dataptr->data;
         if (memddstat->opened == 1) {
-// Flush blocks in cache that where not written yet, if any.
-            data = try_block_cache(fi->fh, 0, 1);
-            if (data != NULL)
-                die_syserr();
-            sync_flush_dtaq();
 // Update the filesize when needed.
             update_filesize_onclose(fi->fh);
 #ifdef x86_64
@@ -806,7 +855,7 @@ static int lessfs_release(const char *path, struct fuse_file_info *fi)
     (void) path;
     (void) fi;
     release_global_lock();
-    release_open_lock();
+    EFUNC;
     return 0;
 }
 
@@ -817,24 +866,20 @@ static int lessfs_fsync(const char *path, int isdatasync,
     FUNC;
     (void) path;
     (void) isdatasync;
-    open_lock();
-    wait_io_pending(fi->fh);
+    get_global_lock();
+    tiger_lock();
+    flush_wait(fi->fh);
+    release_tiger_lock();
     /* Living on the edge, wait for pending I/O but do not flush the caches. */
     if (config->relax < 2) {
-        sync_flush_dtaq();
-        data = try_block_cache(fi->fh, 0, 1);
-        if (data != NULL)
-            die_syserr();
         update_filesize_onclose(fi->fh);
     }
-    sync_flush_dbu();
-    sync_flush_dbb();
     /* When config->relax == 1 dbsync is not called but the caches within lessfs
        are flushed making this a safer option. */
     if (config->relax == 0)
         dbsync();
     release_global_lock();
-    release_open_lock();
+    EFUNC;
     return 0;
 }
 
@@ -842,8 +887,6 @@ static void lessfs_destroy(void *unused __attribute__ ((unused)))
 {
     FUNC;
     if ( config->transactions) lessfs_trans_stamp();
-    sync_flush_dbu();
-    sync_flush_dbb();
     clear_dirty();
     tc_close(0);
 #ifdef ENABLE_CRYPTO
@@ -856,8 +899,7 @@ static void lessfs_destroy(void *unused __attribute__ ((unused)))
        free(config->commithash);
     }
     free(config);
-    free((char *) blkdta->blockdata);
-    free(blkdta);
+    EFUNC;
     return;
 }
 
@@ -909,9 +951,6 @@ void freeze_nospace(char *dbpath)
         ("Filesystem for database %s has insufficient space to continue, freezing I/O",
          dbpath);
     get_global_lock();
-    sync_flush_dbu();
-    sync_flush_dbb();
-    sync_flush_dtaq(); 
     tc_close(1);
     LFATAL("All IO is now suspended until space comes available.");
     LFATAL
@@ -927,38 +966,20 @@ void freeze_nospace(char *dbpath)
     LFATAL("Resuming IO : sufficient space available.");
 }
 
-
-void *flush_dbu_worker(void *arg)
+void *queue_gard(void *arg)
 {
-   int sleeptime=config->flushtime;
-   int done;
    while(1)
    {
-      LDEBUG("flush_dbu_worker : call sync_flush_dbu"); 
-      done=sync_flush_dbu();
-      if ( done == 0 ){
-         sleeptime=config->flushtime;
-      } else {
-         sleeptime=sleeptime/2;
+      sleep(1);
+      if ( config->cachesize/2 < tctreernum(rdtree)*sizeof(CCACHEDTA) ||\
+           config->cachesize/2 < tctreernum(cachetree)*sizeof(CCACHEDTA)){
+         LDEBUG("queue_gard : force to drain the cache");
+         get_global_lock();
+         tiger_lock();
+         flush_queue(0, 1); 
+         release_tiger_lock();
+         release_global_lock();
       }
-      sleep(sleeptime);
-   } 
-}
-
-void *flush_dbb_worker(void *arg)
-{
-   int sleeptime=config->flushtime;
-   int done;
-   while(1)
-   {
-      LDEBUG("flush_dbb_worker : call sync_flush_dbb"); 
-      done=sync_flush_dbb();
-      if ( done == 0 ){
-         sleeptime=config->flushtime;
-      } else {
-         sleeptime=sleeptime/2;
-      }
-      sleep(sleeptime);
    }
 }
 
@@ -1095,18 +1116,6 @@ void show_lock_status(int csocket)
          strlen
          ("global_lock : 0 (not set)\n"));
    }
-   if ( 0 != try_open_lock()) {
-      timeoutWrite(3, csocket,
-      "open_lock : 1 (set)\n",
-      strlen
-      ("open_lock : 1 (set)\n"));
-   } else {
-      release_open_lock();
-      timeoutWrite(3, csocket,
-         "open_lock : 0 (not set)\n",
-         strlen
-         ("open_lock : 0 (not set)\n"));
-   }
    if ( 0 != try_tiger_lock()) {
       timeoutWrite(3, csocket,
       "tiger_lock : 1 (set)\n",
@@ -1119,42 +1128,6 @@ void show_lock_status(int csocket)
          strlen
          ("tiger_lock : 0 (not set)\n"));
    }
-   if ( 0 != try_dbb_lock()) {
-      timeoutWrite(3, csocket,
-      "dbb_lock : 1 (set)\n",
-      strlen
-      ("dbb_lock : 1 (set)\n"));
-   } else {
-      release_dbb_lock();
-      timeoutWrite(3, csocket,
-         "dbb_lock : 0 (not set)\n",
-         strlen
-         ("dbb_lock : 0 (not set)\n"));
-   }
-   if ( 0 != try_dbu_lock()) {
-      timeoutWrite(3, csocket,
-      "dbu_lock : 1 (set)\n",
-      strlen
-      ("dbu_lock : 1 (set)\n"));
-   } else {
-      release_dbu_lock();
-      timeoutWrite(3, csocket,
-         "dbu_lock : 0 (not set)\n",
-         strlen
-         ("dbu_lock : 0 (not set)\n"));
-   }
-   if ( 0 != try_moddb_lock()) {
-      timeoutWrite(3, csocket,
-      "moddb_lock : 1 (set)\n",
-      strlen
-      ("moddb_lock : 1 (set)\n"));
-   } else {
-      release_moddb_lock();
-      timeoutWrite(3, csocket,
-         "moddb_lock : 0 (not set)\n",
-         strlen
-         ("moddb_lock : 0 (not set)\n"));
-   }
    timeoutWrite(3, csocket,
       "---------------------\n",
       strlen
@@ -1163,54 +1136,6 @@ void show_lock_status(int csocket)
       "normally set\n\n",
       strlen
       ("normally set\n\n"));
-   if ( 0 != try_worker_lock()) {
-      timeoutWrite(3, csocket,
-      "worker_lock : 1 (set)\n",
-      strlen
-      ("worker_lock : 1 (set)\n"));
-   } else {
-      release_worker_lock();
-      timeoutWrite(3, csocket,
-         "worker_lock : 0 (not set)\n",
-         strlen
-         ("worker_lock : 0 (not set)\n"));
-   }
-   if ( 0 != try_write_lock()) {
-      timeoutWrite(3, csocket,
-      "write_lock : 1 (set)\n",
-      strlen
-      ("write_lock : 1 (set)\n"));
-   } else {
-      release_write_lock();
-      timeoutWrite(3, csocket,
-         "write_lock : 0 (not set)\n",
-         strlen
-         ("write_lock : 0 (not set)\n"));
-   }
-   if ( 0 != try_qempty_lock()) {
-      timeoutWrite(3, csocket,
-      "qempty_lock : 1 (set)\n",
-      strlen
-      ("qempty_lock : 1 (set)\n"));
-   } else {
-      release_qempty_lock();
-      timeoutWrite(3, csocket,
-         "qemptu_lock : 0 (not set)\n",
-         strlen
-         ("qempty_lock : 0 (not set)\n"));
-   }
-   if ( 0 != try_qdta_lock()) {
-      timeoutWrite(3, csocket,
-      "qdta_lock : 1 (set)\n\n",
-      strlen
-      ("qdta_lock : 1 (set)\n\n"));
-   } else {
-      release_qdta_lock();
-      timeoutWrite(3, csocket,
-         "qdta_lock : 0 (not set)\n\n",
-         strlen
-         ("qdta_lock : 0 (not set)\n\n"));
-   }
 }
 
 void *ioctl_worker(void *arg)
@@ -1351,19 +1276,6 @@ void *ioctl_worker(void *arg)
 }
 
 
-void *init_data_writer(void *arg)
-{
-    get_qempty_lock();
-    while (1) {
-        get_qdta_lock();
-        LDEBUG("init_data_writer : got qdta lock");
-        sync_flush_dtaq();
-        release_qempty_lock();
-        LDEBUG("init_data_writer : released qempty lock");
-    }
-    pthread_exit(NULL);
-}
-
 // Flush data every flushtime seconds.
 void *lessfs_flush(void *arg)
 {
@@ -1372,12 +1284,14 @@ void *lessfs_flush(void *arg)
     while (1) {
         sleep(config->flushtime);
         LDEBUG("lessfs_flush: flush_dta_queue");
-        open_lock();
-        tiger_lock();
         get_global_lock();
-        flush_dta_queue();
-        get_moddb_lock();
-        sync_flush_dbb(); 
+        while ( 0 != tctreernum(cachetree)) {
+           LDEBUG("Waiting for %llu records to drain",tctreernum(cachetree));
+           tiger_lock();
+           flush_queue(0,0);
+           release_tiger_lock();
+           usleep(10000);
+        }
         if ( config->transactions) lessfs_trans_stamp(); 
         if (NULL == config->blockdatabs) {
            if ( lastoffset != nextoffset) {
@@ -1387,7 +1301,6 @@ void *lessfs_flush(void *arg)
               lastoffset=nextoffset;
            }
         }
-        sync_flush_dbu(); 
         sync_all_filesizes();
         if ( config->blockdatabs != NULL ) {
             if ( config->transactions ) if ( !tchdbtrancommit(dbdta)) die_dataerr("IO error, unable to commit dbdta transaction");
@@ -1426,10 +1339,7 @@ void *lessfs_flush(void *arg)
            tcbdbtranbegin(dbdirent);
            tcbdbtranbegin(dbl);
         }
-        release_moddb_lock();
         release_global_lock();
-        release_tiger_lock();
-        release_open_lock();
     }
     pthread_exit(NULL);
 }
@@ -1466,81 +1376,47 @@ void *init_worker(void *arg)
 #ifndef SHA3
     word64 res[max_threads][3];
 #endif
+    char *a;
+    unsigned long long p;
+    CCACHEDTA *ccachedta;
+    INOBNO *inobno[max_threads];
+    char *key;
+    int size;
+    int vsize;
+    int lockres;
+    int found[max_threads];
+    char *dupkey;
 
-    memcpy(&count, arg, sizeof(int));
-    get_global_lock();
-    if (NULL == tdta) {
-        tdta = malloc(max_threads * sizeof(BLKDTA));
-        for (c = 0; c < max_threads; c++) {
-            tdta[c] = s_malloc(sizeof(BLKDTA));
-            tdta[c]->blockfiller = s_malloc(BLKSIZE + 1);
-            tdta[c]->inode = 0;
-        }
-    }
-    release_global_lock();
-
-    tdta[count]->blockdata = s_malloc(BLKSIZE);
+    memcpy(&count, arg, sizeof(int)); // count is thread number.
+    found[count]=0;
+    key=s_malloc(sizeof(max_threads*sizeof(unsigned long long)));
     while (1) {
-        memset((char *) tdta[count]->blockdata, 0, BLKSIZE);
-        worker_lock();
-
-        memcpy((char *) tdta[count]->blockdata, blkdta->buf, blkdta->bsize);
-        memcpy(&tdta[count]->bsize, &blkdta->bsize, sizeof(size_t));
-        tdta[count]->inode = blkdta->inode;
-        memcpy(&tdta[count]->blocknr, &blkdta->blocknr,
-               sizeof(unsigned long long));
-        memcpy(&tdta[count]->sparse, &blkdta->sparse, sizeof(bool));
-        memcpy(&tdta[count]->offsetblock, &blkdta->offsetblock,
-               sizeof(off_t));
-        release_write_lock();
-        memset(tdta[count]->blockfiller, 0, BLKSIZE + 1);
-        memmove(tdta[count]->blockfiller + tdta[count]->offsetblock,
-                tdta[count]->blockdata, tdta[count]->bsize);
-        if (tdta[count]->bsize + tdta[count]->offsetblock < BLKSIZE) {
-            tdta[count]->stiger = NULL;
-        } else {
-#ifdef SHA3
-            tdta[count]->stiger=sha_binhash(tdta[count]->blockfiller, BLKSIZE);
-#else
-            binhash(tdta[count]->blockfiller, BLKSIZE,res[count]);
-            tdta[count]->stiger = (unsigned char *)&res[count];
-#endif
+        if ( found[count] == 0 ) {
+           sleep(1);
+        } 
+        found[count]=0;
+        tiger_lock();
+        tctreeiterinit(cachetree);
+        if ( NULL != (key=(char *)tctreeiternext(cachetree, &size))){
+           a=(char *)tctreeget(cachetree, (void *)key, size, &vsize);
+           if ( NULL != a ) {
+              memcpy(&p,a,vsize);
+              ccachedta=(CCACHEDTA *)p;
+              dupkey=s_malloc(size);
+              memcpy(dupkey,key,size);
+              inobno[count]=(INOBNO *)dupkey;
+              tctreeout(cachetree,key,size);
+              found[count]++;
+              ccachedta->pending=1;
+              release_tiger_lock();
+              cook_cache(dupkey,size,ccachedta); 
+              LDEBUG("Write %llu-%llu done get lock and delete cache",inobno[count]->inode,inobno[count]->blocknr);
+              free(dupkey);
+           } 
         }
-        tdta[count]->compressed = NULL;
-// See if we can obtain a general lock, 
-// if not we don't wait idle but start with compressing the block
-        if (0 != try_global_lock()) {
-// Do not start to compress if we are not going to use it.
-// Better to start with addBlock as soon as we can.
-            if (tdta[count]->bsize + tdta[count]->offsetblock == BLKSIZE) {
-#ifdef LZO
-                tdta[count]->compressed =
-                    lzo_compress(tdta[count]->blockfiller, BLKSIZE);
-#else
-                tdta[count]->compressed =
-                    clz_compress(tdta[count]->blockfiller, BLKSIZE);
-#endif
-            }
-            get_global_lock();
-        }
-        if (NULL != config->blockdatabs) {
-            LDEBUG("write to tc backend");
-            addBlock(tdta[count]);
-        } else {
-            LDEBUG("write to file_io backend");
-            add_file_block(tdta[count]);
-        }
-        tdta[count]->inode = 0;
-        release_global_lock();
-#ifdef SHA3
-        if (NULL != tdta[count]->stiger)
-            free(tdta[count]->stiger);
-#endif
+        if ( 0 == found[count]) release_tiger_lock(); 
     }
-    free((char *) tdta[count]->blockdata);
-    free(tdta[count]->blockfiller);
-    free(tdta[count]);
-    tdta[count] = NULL;
+    LFATAL("Thread %u exits",count);
     pthread_exit(NULL);
 }
 
@@ -1575,7 +1451,6 @@ void mark_dirty()
         finuse.offset=0;
         file_update_inuse(stiger,&finuse);
     }
-    sync_flush_dbu();
     free(brand);
 #ifdef SHA3
     free(stiger);
@@ -1644,32 +1519,19 @@ static void *lessfs_init()
     unsigned long long inuse;
     struct tm * timeinfo;
     time_t tdate;
-    pthread_spin_init(&moddb_spinlock, 0);
-    pthread_spin_init(&dbu_spinlock, 0);
-    pthread_spin_init(&dbb_spinlock, 0);
 
 #ifdef LZO
     initlzo();
 #endif
-    blkdta = s_malloc(sizeof(BLKDTA));
-    blkdta->blockdata = s_malloc(BLKSIZE);
     if (NULL != getenv("MAX_THREADS"))
         max_threads = atoi(getenv("MAX_THREADS"));
 
     pthread_t worker_thread[max_threads];
     pthread_t ioctl_thread;
-    pthread_t data_thread;
     pthread_t housekeeping_thread;
     pthread_t flush_thread;
-    pthread_t flush_dbu_thread;
-    pthread_t flush_dbb_thread;
+    pthread_t queue_gard_thread;
 
-    LDEBUG("lessfs_init : worker_lock");
-    worker_lock();
-    LDEBUG("lessfs_init : write_lock");
-    write_lock();
-    LDEBUG("lessfs_init : qdta_lock");
-    get_qdta_lock();
     for (count = 0; count < max_threads; count++) {
         cnt = s_malloc(sizeof(int));
         memcpy(cnt, &count, sizeof(int));
@@ -1682,18 +1544,10 @@ static void *lessfs_init()
     ret = pthread_create(&ioctl_thread, NULL, ioctl_worker, (void *) NULL);
     if (ret != 0)
         die_syserr();
-    ret =
-        pthread_create(&data_thread, NULL, init_data_writer,
-                       (void *) NULL);
-    if (ret != 0)
-        die_syserr();
     ret = pthread_create(&flush_thread, NULL, lessfs_flush, (void *) NULL);
     if (ret != 0)
         die_syserr();
-    ret = pthread_create(&flush_dbu_thread, NULL, flush_dbu_worker, (void *) NULL);
-    if (ret != 0)
-        die_syserr();
-    ret = pthread_create(&flush_dbb_thread, NULL, flush_dbb_worker, (void *) NULL);
+    ret = pthread_create(&queue_gard_thread, NULL, queue_gard, (void *) NULL);
     if (ret != 0)
         die_syserr();
     ret =
@@ -1724,19 +1578,16 @@ static void *lessfs_init()
     free(stiger);
 #endif
 
+
     if ( config->transactions ) {
 #ifdef SHA3
        config->commithash=sha_binhash((unsigned char *)"COMMITSTAMP", strlen("COMMITSTAMP"));
-       config->cursnaphash=sha_binhash((unsigned char *)"CURRENTSNAPSHOT", strlen("CURRENTSNAPSHOT"));
 #else
        binhash((unsigned char *)"COMMITSTAMP", strlen("COMMITSTAMP"), res);
        config->commithash=s_malloc(config->hashlen);
        memcpy(config->commithash,(unsigned char *)&res,config->hashlen);
-       binhash((unsigned char *)"CURRENTSNAPSHOT", strlen("CURRENTSNAPSHOT"), res);
-       config->cursnaphash=s_malloc(config->hashlen);
-       memcpy(config->cursnaphash,(unsigned char *)&res,config->hashlen);
 #endif
-       config->cursnap=getInUse(config->cursnaphash);
+
        if ( config->blockdatabs != NULL ) {
            inuse=getInUse(config->commithash);
            if ( 0 == inuse ) { 

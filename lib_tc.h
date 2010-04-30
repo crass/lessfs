@@ -25,6 +25,8 @@
 #define MAX_FUSE_BLKSIZE 131072
 #define BMWLEN 224
 #define METAQSIZE 2048
+#define MAX_HASH_LEN 32
+#define CACHE_MAX_AGE 30
 
 typedef unsigned long long int word64;
 typedef unsigned long word32;
@@ -58,11 +60,6 @@ typedef struct {
 } CRYPTO;
 
 typedef struct {
-    unsigned long long blocknr;
-    unsigned char blockdata[MAX_FUSE_BLKSIZE];
-} BLKCACHE;
-
-typedef struct {
     struct stat stbuf;
     unsigned int updated;
     unsigned long long blocknr;
@@ -73,32 +70,20 @@ typedef struct {
 } MEMDDSTAT;
 
 typedef struct {
-    compr *compressed;
-    const char *blockdata;
-    unsigned long long blocknr;
-    unsigned int offsetblock;
-    size_t bsize;
-    unsigned long long inode;
-    bool sparse;
-    unsigned char *stiger;
-    unsigned char *blockfiller;
-    unsigned char *buf;
-} BLKDTA;
-
-typedef struct {
-    unsigned long long offset;
-    unsigned long size;
     unsigned char data[MAX_FUSE_BLKSIZE];
-} QDTA;
+    unsigned char hash[MAX_HASH_LEN];
+    int dirty;
+    time_t creationtime;
+    int pending; 
+} CCACHEDTA;
 
-DBT *check_block_exists(INOBNO);
+DBT *check_block_exists(INOBNO *);
 unsigned long long readBlock(unsigned long long, const char *, char *,
-                             unsigned long long);
+                             unsigned long long, size_t);
 int dbstat(const char *, struct stat *);
 void formatfs();
 unsigned long long get_next_inode();
 void bin_write_dbdata(TCHDB *, void *, int, void *, int);
-void asc_write_dbdata(TCHDB *, unsigned char *, unsigned char *);
 void mbin_write_dbdata(TCMDB *, void *, int, void *, int);
 void dbmknod(const char *, mode_t, char *, dev_t);
 void get_global_lock();
@@ -109,12 +94,11 @@ unsigned long long getInUse(unsigned char *);
 void tc_open(bool, bool);
 void tc_close(bool);
 DBT *search_dbdata(TCHDB *, void *key, int);
-char *hash(char *, int);
+//char *hash(char *, int);
 void update_inuse(unsigned char *, unsigned long long);
 void hash_update_filesize(MEMDDSTAT *, unsigned long long);
 void update_filesize(unsigned long long, unsigned long long, unsigned int,
                      unsigned long long, bool, unsigned int, unsigned int);
-void addBlock(BLKDTA *);
 void db_update_block(const char *, unsigned long long,
                      unsigned int, unsigned long long, unsigned long long,
                      unsigned char *);
@@ -127,8 +111,8 @@ int fs_rmdir(const char *);
 unsigned long long get_inode(const char *);
 int fs_readdir(const char *, void *, fuse_fill_dir_t, off_t,
                struct fuse_file_info *);
-void btasc_curwrite_dbdata(TCBDB *, BDBCUR *, unsigned char *);
-void btasc_write_dbdata(TCBDB *, char *, char *);
+//void btasc_curwrite_dbdata(TCBDB *, BDBCUR *, unsigned char *);
+//void btasc_write_dbdata(TCBDB *, char *, char *);
 int fs_link(char *, char *);
 int fs_symlink(char *, char *);
 int fs_readlink(const char *, char *, size_t);
@@ -159,53 +143,20 @@ int update_parent_time(char *, int);
 void tc_defrag();
 void binhash(unsigned char *, int, word64[3]);
 unsigned char *sha_binhash(unsigned char *, int);
-void dta_mutex_init(int);
-void release_dta_lock(int);
-void release_write_lock();
-void dta_lock(int);
-void worker_lock();
-void sync_flush_dtaq();
-void release_worker_lock();
-void release_all_dta_lock();
-void all_dta_lock();
-void write_lock();
-void tiger_lock();
-void open_lock();
 void release_tiger_lock();
-void release_open_lock();
-void get_qempty_lock();
-void get_hash_lock();
-void get_qdta_lock();
-void get_moddb_lock();
-void get_dbu_lock();
-void get_dbb_lock();
-void release_dbu_lock();
-void release_dbb_lock();
-void release_moddb_lock();
-void release_hash_lock();
-void release_qempty_lock();
-void release_qdta_lock();
-void wait_io_pending(unsigned long long);
 void write_nfi(unsigned long long);
 void btbin_write_dup(TCBDB *, void *, int, void *, int);
 void *btsearch_keyval(TCBDB *, void *, int, void *, int);
 int inode_block_pending(unsigned long long, unsigned long long);
-DBT *try_block_cache(unsigned long long, unsigned long long, unsigned int);
 void flush_dta_queue();
-void add_blk_to_cache(unsigned long long, unsigned long long,
-                      unsigned char *);
-void qdta(unsigned char *, DBT *);
 void comprfree(compr *);
 void loghash(char *, unsigned char *);
 int try_global_lock();
 MEMDDSTAT *inode_meta_from_cache(unsigned long long);
-void wait_inode_block_pending(unsigned long long, unsigned long long);
 void parseconfig(int);
 void checkpasswd(char *);
 int btdelete_curkey(TCBDB *, void *, int, void *, int);
 void log_fatal_hash(char *, unsigned char *);
-int sync_flush_dbu();
-int sync_flush_dbb();
 void delete_inuse(unsigned char *);
 void delete_dbb(INOBNO *);
 void write_dbb_to_cache(INOBNO *,unsigned char *);
@@ -213,15 +164,11 @@ void clear_dirty();
 int get_blocksize();
 void brand_blocksize();
 int update_filesize_cache(struct stat *, off_t);
-int try_open_lock();
-int try_write_lock();
 int try_tiger_lock();
-int try_dbb_lock();
-int try_dbu_lock();
-int try_moddb_lock();
-int try_worker_lock();
-int try_qdta_lock();
-int try_qempty_lock();
 void drop_databases();
 void lessfs_trans_stamp();
-void lessfs_snap_stamp();
+DBT *search_nhash(TCNDB *, void *, int );
+void flush_queue(unsigned long long , bool);
+void flush_abort(unsigned long long);
+void flush_wait(unsigned long long);
+void cook_cache(char *, int, CCACHEDTA *);

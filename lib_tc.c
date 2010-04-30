@@ -69,7 +69,6 @@ extern char *function;
 extern int debug;
 extern int BLKSIZE;
 extern int max_threads;
-extern BLKDTA **tdta;
 extern char *passwd;
 
 TCHDB *dbb = NULL;
@@ -81,26 +80,14 @@ TCHDB *dbdta = NULL;
 TCBDB *dbdirent = NULL;
 TCBDB *freelist = NULL;         // Free list for file_io
 TCMDB *dbcache;
-TCMDB *dbdtaq;
-TCMDB *blkcache;                // A cache that has the tiger hash as key and the fs data as value.
-TCMDB *dbum;
-TCMDB *dbbm;
+TCTREE *cachetree;
+TCTREE *rdtree;
 int fdbdta = 0;
 
 unsigned long long nextoffset = 0;
-unsigned int dbu_qcount = 0;
-unsigned int dbb_qcount = 0;
 int written = 0;
 static pthread_mutex_t global_lock_mutex = PTHREAD_MUTEX_INITIALIZER;
-static pthread_mutex_t worker_mutex = PTHREAD_MUTEX_INITIALIZER;
-static pthread_mutex_t write_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t tiger_mutex = PTHREAD_MUTEX_INITIALIZER;
-static pthread_mutex_t open_mutex = PTHREAD_MUTEX_INITIALIZER;
-static pthread_mutex_t qdta_mutex = PTHREAD_MUTEX_INITIALIZER;
-static pthread_mutex_t qempty_mutex = PTHREAD_MUTEX_INITIALIZER;
-pthread_spinlock_t moddb_spinlock;
-pthread_spinlock_t dbu_spinlock;
-pthread_spinlock_t dbb_spinlock;
 
 #ifdef i386
 #define ITERATIONS 30
@@ -223,6 +210,7 @@ TCHDB *hashdb_open(char *dbpath, int cacherow,
             die_dberr("Error on setting defragmentation : %s",tchdberrmsg(ecode));
         }
     }
+    tchdbsetmutex(hdb);
     tchdbtune(hdb, bucketsize, 0, 0, HDBTLARGE);
     //if (!tchdbopen(hdb, dbpath, HDBOWRITER | HDBOCREAT| HDBOTSYNC)) {
     if (!tchdbopen(hdb, dbpath, HDBOWRITER | HDBOCREAT)) {
@@ -236,7 +224,6 @@ TCHDB *hashdb_open(char *dbpath, int cacherow,
 
 void tc_defrag()
 {
-    sync_flush_dtaq();
     if (!tchdboptimize(dbb, atol(config->fileblockbs), 0, 0, HDBTLARGE))
         LINFO("fileblock.tch not optimized");
     if (!tchdboptimize(dbu, atol(config->blockusagebs), 0, 0, HDBTLARGE))
@@ -320,6 +307,7 @@ void tc_open(bool defrag, bool createpath)
         if ( createpath ) mkpath(sp,0744);
         free(sp);
         freelist = tcbdbnew();
+        tcbdbsetmutex(freelist); 
         tcbdbtune(freelist, 0, 0, atol(config->freelistbs), -1, -1,
                   BDBTLARGE);
         /* The dirent database is a B-TREE DB with cursors */
@@ -345,8 +333,8 @@ void tc_open(bool defrag, bool createpath)
     LDEBUG("Open database %s", dbpath);
     dbs = hashdb_open(dbpath, 10, atol(config->symlinkbs));
     free(dbpath);
-
     dbdirent = tcbdbnew();
+    tcbdbsetmutex(dbdirent);
     tcbdbtune(dbdirent, 0, 0, atol(config->direntbs), -1, -1, BDBTLARGE);
     /* The dirent database is a B-TREE DB with cursors */
     dbpath = as_sprintf("%s/dirent.tcb", config->dirent);
@@ -365,6 +353,7 @@ void tc_open(bool defrag, bool createpath)
     free(dbpath);
 
     dbl = tcbdbnew();
+    tcbdbsetmutex(dbl);
     tcbdbtune(dbl, 0, 0, atol(config->hardlinkbs), -1, -1, BDBTLARGE);
     /* The dbl database is a B-TREE DB with cursors */
     dbpath = as_sprintf("%s/hardlink.tcb", config->hardlink);
@@ -384,11 +373,9 @@ void tc_open(bool defrag, bool createpath)
     free(dbpath);
 
     if (!defrag) {
-        dbbm = tcmdbnew();
-        dbum = tcmdbnew();
+        cachetree=tctreenew();
+        rdtree=tctreenew();
         dbcache = tcmdbnew();
-        dbdtaq = tcmdbnew();
-        blkcache = tcmdbnew();
         if (NULL == config->blockdatabs) {
             if (-1 ==
                 (fdbdta =
@@ -501,11 +488,9 @@ void tc_close(bool defrag)
     tcbdbdel(dbl);
 
     if (!defrag) {
+        tctreeclear(cachetree);
+        tctreeclear(rdtree);
         tcmdbdel(dbcache);
-        tcmdbdel(dbbm);
-        tcmdbdel(dbum);
-        tcmdbdel(dbdtaq);
-        tcmdbdel(blkcache);
         if (NULL == config->blockdatabs) {
             close(fdbdta);
             free(config->nexthash);
@@ -522,70 +507,6 @@ void get_global_lock()
     return;
 }
 
-void get_qdta_lock()
-{
-    FUNC;
-    pthread_mutex_lock(&qdta_mutex);
-    EFUNC;
-    return;
-}
-
-void get_qempty_lock()
-{
-    FUNC;
-    pthread_mutex_lock(&qempty_mutex);
-    EFUNC;
-    return;
-}
-
-void get_moddb_lock()
-{
-    FUNC;
-    pthread_spin_lock(&moddb_spinlock);
-    EFUNC;
-    return;
-}
-
-void get_dbu_lock()
-{
-    FUNC;
-    pthread_spin_lock(&dbu_spinlock);
-    EFUNC;
-    return;
-}
-
-void get_dbb_lock()
-{
-    FUNC;
-    pthread_spin_lock(&dbb_spinlock);
-    EFUNC;
-    return;
-}
-
-void worker_lock()
-{
-    FUNC;
-    pthread_mutex_lock(&worker_mutex);
-    EFUNC;
-    return;
-}
-
-void write_lock()
-{
-    FUNC;
-    pthread_mutex_lock(&write_mutex);
-    EFUNC;
-    return;
-}
-
-void open_lock()
-{
-    FUNC;
-    pthread_mutex_lock(&open_mutex);
-    EFUNC;
-    return;
-}
-
 void tiger_lock()
 {
     FUNC;
@@ -594,61 +515,11 @@ void tiger_lock()
     return;
 }
 
-void release_write_lock()
-{
-    pthread_mutex_unlock(&write_mutex);
-    return;
-}
-
-void release_moddb_lock()
-{
-    pthread_spin_unlock(&moddb_spinlock);
-    return;
-}
-
-void release_dbu_lock()
-{
-    pthread_spin_unlock(&dbu_spinlock);
-    return;
-}
-
-void release_dbb_lock()
-{
-    pthread_spin_unlock(&dbb_spinlock);
-    return;
-}
-
-int try_moddb_lock()
-{
-    int res;
-    res=pthread_spin_trylock(&moddb_spinlock);
-    return(res);
-}
-
-
-int try_dbu_lock()
-{
-    int res;
-    res=pthread_spin_trylock(&dbu_spinlock);
-    return(res);
-} 
-
-int try_dbb_lock()
-{
-    int res;
-    res=pthread_spin_trylock(&dbb_spinlock);
-    return(res);
-} 
-
-void release_open_lock()
-{
-    pthread_mutex_unlock(&open_mutex);
-    return;
-}
-
 void release_tiger_lock()
 {
+    FUNC;
     pthread_mutex_unlock(&tiger_mutex);
+    EFUNC;
     return;
 }
 
@@ -656,30 +527,8 @@ void release_global_lock()
 {
     FUNC;
     pthread_mutex_unlock(&global_lock_mutex);
-    return;
-}
-
-void release_qdta_lock()
-{
-    FUNC;
-    pthread_mutex_unlock(&qdta_mutex);
     EFUNC;
     return;
-}
-
-void release_qempty_lock()
-{
-    FUNC;
-    pthread_mutex_unlock(&qempty_mutex);
-    EFUNC;
-    return;
-}
-
-int try_open_lock()
-{
-    int res;
-    res = pthread_mutex_trylock(&open_mutex);
-    return (res);
 }
 
 int try_tiger_lock()
@@ -689,51 +538,13 @@ int try_tiger_lock()
     return (res);
 }
 
-int try_qdta_lock()
-{
-    int res;
-    res = pthread_mutex_trylock(&qdta_mutex);
-    return (res);
-}
-
 int try_global_lock()
 {
     int res;
+    FUNC;
     res = pthread_mutex_trylock(&global_lock_mutex);
-    return (res);
-}
-
-int try_qempty_lock()
-{
-    int res;
-    FUNC;
-    res = pthread_mutex_trylock(&qempty_mutex);
     EFUNC;
     return (res);
-}
-
-int try_worker_lock()
-{
-    int res;
-    FUNC;
-    res = pthread_mutex_trylock(&worker_mutex);
-    EFUNC;
-    return (res);
-}
-
-int try_write_lock()
-{
-    int res;
-    FUNC;
-    res = pthread_mutex_trylock(&write_mutex);
-    EFUNC;
-    return (res);
-}
-
-void release_worker_lock()
-{
-    pthread_mutex_unlock(&worker_mutex);
-    return;
 }
 
 DBT *create_ddbuf(struct stat stbuf, char *filename)
@@ -967,8 +778,6 @@ void formatfs()
         file_update_inuse(stiger,&inuse);
     }
     lessfs_trans_stamp();
-    lessfs_snap_stamp();
-    sync_flush_dbu();   
 #ifdef SHA3
     free(stiger);
 #endif 
@@ -1162,136 +971,86 @@ void comprfree(compr * compdata)
     }
 }
 
+
 unsigned long long readBlock(unsigned long long blocknr,
                              const char *filename, char *blockdata,
-                             unsigned long long inode)
+                             unsigned long long inode, size_t size)
 {
-    int ret = 0;
-    DBT *data;
-    DBT *tdata;
-    DBT *decrypted = NULL;
-    DBT *cachedata;
-    unsigned char *stiger;
-    unsigned char *dtiger=NULL;
-    compr *uncompdata = NULL;
-    INOBNO inobno;
-    BLKCACHE *blk;
-#ifndef SHA3
-    word64 res[3];
-#endif
+     char *cachedata;
+     DBT *cdata;
+     DBT *data;
+     INOBNO inobno;
+     int ret=0;
+     CCACHEDTA *ccachedta;
+     DBT *tdata;
+     int vsize;
+     unsigned long long p;
 
-    FUNC;
-    inobno.inode = inode;
-    inobno.blocknr = blocknr;
-    data = try_block_cache(inode, blocknr, 0);
-    if (NULL != data) {
-        LDEBUG("readBlock : block %llu - %llu found in cache", inode,
-               blocknr);
-        memcpy(blockdata, data->data, data->size);
-        ret = data->size;
-        DBTfree(data);
-        return (ret);
-    }
-    tdata = check_block_exists(inobno);
-    if (NULL == tdata) return (0);
-    stiger=tdata->data;
-// First try the cache
-    get_moddb_lock();
-    decrypted = search_memhash(dbdtaq, stiger, config->hashlen);
-    if (NULL == decrypted) {
-        LDEBUG("readBlock hash not found in dbdtaq");
-#ifndef ENABLE_CRYPTO
-        decrypted = search_dbdata(dbdta, stiger, config->hashlen);
-        if (NULL == decrypted) {
-#else
-        data = search_dbdata(dbdta, stiger, config->hashlen);
-        if (NULL == data) {
-#endif
-            LDEBUG("readBlock hash not found in dbdta");
-            cachedata =
-                search_memhash(blkcache, &inobno.inode,
-                               sizeof(unsigned long long));
-            if (NULL != cachedata) {
-                blk = (BLKCACHE *) cachedata->data;
-#ifdef SHA3
-                dtiger=sha_binhash(blk->blockdata, BLKSIZE);
-#else
-                binhash(blk->blockdata, BLKSIZE, res);
-                dtiger=(unsigned char *) &res;
-#endif
-                if (0 == memcmp(dtiger, stiger, config->hashlen)) {
-                    decrypted = s_malloc(sizeof(DBT));
-                    decrypted->data = s_malloc(BLKSIZE);
-                    decrypted->size = BLKSIZE;
-                    memcpy(decrypted->data, blk->blockdata, BLKSIZE);
-                } else {
-                    LFATAL
-                        ("readBlock - unable to find dbdta block for inode %llu - %llu",
-                         inobno.inode, inobno.blocknr);
-                    log_fatal_hash
-                        ("readBlock - unable to find dbdta block hash :",
-                         stiger);
-                    die_dataerr("No data found to read.");
-                }
-#ifdef SHA3
-                free(dtiger);
-#endif
-                DBTfree(cachedata);
-            } else {
-                LFATAL
-                    ("readBlock : unable to find dbdta block for inode %llu - %llu",
-                     inobno.inode, inobno.blocknr);
-                log_fatal_hash
-                    ("readBlock : unable to find dbdta block hash :",
-                     stiger);
-                die_dataerr("No data found to read.");
-            }
-#ifndef ENABLE_CRYPTO
+     inobno.inode=inode;
+     inobno.blocknr=blocknr;
+
+     tiger_lock();
+     cachedata=(char *)tctreeget(rdtree, (void *)&inobno, sizeof(INOBNO), &vsize);
+     if ( NULL == cachedata ) {
+        tdata=check_block_exists(&inobno);
+        if (NULL == tdata) { 
+            release_tiger_lock();
+            return (0);
         }
-#else
-        } else {
-            if (config->encryptdata) {
-                decrypted = decrypt(data);
-                DBTfree(data);
-            } else
-                decrypted = data;
-        }
-#endif
-    }
-    release_moddb_lock();
-    if (decrypted->size != BLKSIZE) {
+        cdata = search_dbdata(dbdta, tdata->data, tdata->size);
+        DBTfree(tdata);
+        if (NULL == cdata) die_dataerr("Could not find block");
+        if (cdata->size < BLKSIZE ) {
 #ifdef LZO
-        uncompdata = lzo_decompress(decrypted->data, decrypted->size);
+           data = (DBT *)lzo_decompress(cdata->data, cdata->size);
 #else
-        uncompdata = clz_decompress(decrypted->data, decrypted->size);
+           data = (DBT *)clz_decompress(cdata->data, cdata->size);
 #endif
-        memcpy(blockdata, uncompdata->data, uncompdata->size);
-        ret = uncompdata->size;
-        comprfree(uncompdata);
-    } else {
-        memcpy(blockdata, decrypted->data, decrypted->size);
-        ret = decrypted->size;
-    }
-    DBTfree(decrypted);
-    DBTfree(tdata);
-    EFUNC;
-    return (ret);
+           DBTfree(cdata);
+           memcpy(blockdata, data->data, data->size);
+           ret = data->size;
+           DBTfree(data);
+        } else {
+           memcpy(blockdata, cdata->data, cdata->size);
+           ret = cdata->size;
+           DBTfree(cdata);
+        }
+// When we read a block < BLKSIZE there it is likely that we need
+// to read it again so it makes sense to put it in a cache.
+        if ( size != BLKSIZE ) {
+           ccachedta=s_zmalloc(sizeof(CCACHEDTA));
+           p=(unsigned long long)ccachedta;
+           ccachedta->dirty=0;
+           ccachedta->pending=0;
+           ccachedta->creationtime=time(NULL);
+           memcpy(&ccachedta->data, blockdata, ret);
+           tctreeput(rdtree, (void *)&inobno, sizeof(INOBNO), (void *)&p, sizeof(unsigned long long));
+        }
+        release_tiger_lock();
+        return(ret);
+// Fetch the block from disk and put it in the cache.
+     }
+     memcpy(&p,cachedata,vsize);
+     ccachedta=(CCACHEDTA *)p;
+     ccachedta->creationtime=time(NULL); 
+     memcpy(blockdata, &ccachedta->data, BLKSIZE);
+     ret = BLKSIZE;
+     release_tiger_lock();
+     return (ret);
 }
 
 void delete_inuse(unsigned char *stiger)
 {
-     get_dbu_lock();
-        tcmdbout(dbum, stiger, config->hashlen);
+     //get_dbu_lock();
         tchdbout(dbu, stiger, config->hashlen);
-     release_dbu_lock();
+     //release_dbu_lock();
 }
 
 void delete_dbb(INOBNO *inobno)
 {
-     get_dbb_lock();
-        tcmdbout(dbbm, inobno, sizeof(INOBNO));
+     //get_dbb_lock();
         tchdbout(dbb, inobno, sizeof(INOBNO));
-     release_dbb_lock();
+     //release_dbb_lock();
 }
 
 /* Return the number of times this block is linked to files */
@@ -1303,17 +1062,11 @@ unsigned long long getInUse(unsigned char *tigerstr)
     if (NULL == tigerstr)
         return (0);
 
-    get_dbu_lock();
-    data = search_memhash(dbum, tigerstr, config->hashlen);
-    if ( NULL == data ) {
-        data = search_dbdata(dbu, tigerstr, config->hashlen);
-    }
+    data = search_dbdata(dbu, tigerstr, config->hashlen);
     if (NULL == data) {
         LDEBUG("getInuse nothing found return 0.");
-        release_dbu_lock();
         return (0);
     }
-    release_dbu_lock();
     memcpy(&counter, data->data, sizeof(counter));
     DBTfree(data);
     return counter;
@@ -1334,28 +1087,10 @@ void update_inuse(unsigned char *hashdata,
                  unsigned long long inuse)
 {
     if (inuse > 0) {
-        if ( dbu_qcount > METAQSIZE ) {
-            sync_flush_dbu();
-        }
-        get_dbu_lock();
-        mbin_write_dbdata(dbum, hashdata, config->hashlen, (unsigned char *) &inuse,
+        bin_write_dbdata(dbu, hashdata, config->hashlen, (unsigned char *) &inuse,
                          sizeof(unsigned long long));
-        dbu_qcount++;
-        release_dbu_lock();
     }
     return;
-}
-
-void write_dbb_to_cache(INOBNO *inobno,unsigned char *stiger)
-{
-    if ( dbb_qcount > METAQSIZE ) {
-         sync_flush_dbb();
-    }
-    get_dbb_lock();
-      mbin_write_dbdata(dbbm, inobno, sizeof(INOBNO), stiger,
-                       config->hashlen);
-      dbb_qcount++;
-    release_dbb_lock();
 }
 
 void btbin_curwrite_dbdata(TCBDB * db, BDBCUR * cur, char *data,
@@ -1371,6 +1106,7 @@ void btbin_curwrite_dbdata(TCBDB * db, BDBCUR * cur, char *data,
     EFUNC;
 }
 
+/*
 void btasc_write_dbdata(TCBDB * db, char *keydata, char *dataData)
 {
     int ecode;
@@ -1381,7 +1117,7 @@ void btasc_write_dbdata(TCBDB * db, char *keydata, char *dataData)
     }
     if ( 0 == config->relax ) tcbdbsync(db);
     EFUNC;
-}
+}*/
 
 void btbin_write_dup(TCBDB * db, void *keydata, int keylen,
                      void *dataData, int datalen)
@@ -1396,6 +1132,7 @@ void btbin_write_dup(TCBDB * db, void *keydata, int keylen,
     EFUNC;
 }
 
+/*
 void btasc_curwrite_dbdata(TCBDB * db, BDBCUR * cur, unsigned char *data)
 {
     int ecode;
@@ -1407,7 +1144,7 @@ void btasc_curwrite_dbdata(TCBDB * db, BDBCUR * cur, unsigned char *data)
     }
     if ( 0 == config->relax ) tcbdbsync(db);
     EFUNC;
-}
+} */
 
 void btbin_write_dbdata(TCBDB * db, void *keydata, int keylen,
                         void *dataData, int datalen)
@@ -1602,72 +1339,6 @@ DBT *search_memhash(TCMDB * db, void *key, int len)
     return data;
 }
 
-void qdta(unsigned char *stiger, DBT * data)
-{
-    get_moddb_lock();
-    loghash("qdta", stiger);
-    mbin_write_dbdata(dbdtaq, stiger, config->hashlen, data->data, data->size);
-    release_moddb_lock();
-}
-
-
-void addBlock(BLKDTA * blkdta)
-{
-    unsigned long long inuse;
-    INOBNO inobno;
-    DBT *cachedata = NULL;
-
-    inobno.inode = blkdta->inode;
-    inobno.blocknr = blkdta->blocknr;
-
-    LDEBUG("addBlock : inode %llu - %llu", inobno.inode, inobno.blocknr);
-    if (blkdta->bsize + blkdta->offsetblock < BLKSIZE) {
-// Flush the blockcache before overwriting.
-        cachedata = try_block_cache(blkdta->inode, blkdta->blocknr, 0);
-        if (cachedata)
-            DBTfree(cachedata);
-        LDEBUG
-            ("addBlock : wrote with add_blk_to_cache  : inode %llu - %llu size %i",
-             inobno.inode, inobno.blocknr, blkdta->bsize);
-        update_filesize(blkdta->inode, blkdta->bsize, blkdta->offsetblock,
-                        blkdta->blocknr, blkdta->sparse, BLKSIZE, 0);
-        add_blk_to_cache(blkdta->inode, blkdta->blocknr,
-                         blkdta->blockfiller);
-        return;
-    }
-
-    inuse = getInUse(blkdta->stiger);
-    if (inuse == 0) {
-        if (NULL == blkdta->compressed) {
-#ifdef LZO
-            blkdta->compressed =
-                lzo_compress(blkdta->blockfiller, BLKSIZE);
-#else
-            blkdta->compressed =
-                clz_compress(blkdta->blockfiller, BLKSIZE);
-#endif
-        }
-        LDEBUG("Compressed %i bytes to %lu bytes", BLKSIZE,
-               blkdta->compressed->size);
-        loghash("addBlk call qdta for hash :", blkdta->stiger);
-        qdta(blkdta->stiger, (DBT *) blkdta->compressed);
-        loghash("addBlock queued with qdta", blkdta->stiger);
-        update_filesize(blkdta->inode, blkdta->bsize, blkdta->offsetblock,
-                        blkdta->blocknr, blkdta->sparse,
-                        blkdta->compressed->size, 0);
-    } else {
-        update_filesize(blkdta->inode, blkdta->bsize, blkdta->offsetblock,
-                        blkdta->blocknr, blkdta->sparse, 0, 1);
-    }
-    if (NULL != blkdta->compressed)
-        comprfree(blkdta->compressed);
-    inuse++;
-    update_inuse(blkdta->stiger, inuse);
-    write_dbb_to_cache(&inobno,blkdta->stiger);
-    return;
-}
-
-
 MEMDDSTAT *inode_meta_from_cache(unsigned long long inode)
 {
     DBT *dataptr;
@@ -1691,7 +1362,6 @@ void update_filesize_onclose(unsigned long long inode)
         LDEBUG("inode %llu not found to update.", inode);
         return;
     }
-    //flush_dta_queue();
     hash_update_filesize(memddstat, inode);
     memddstatfree(memddstat);
     return;
@@ -1709,7 +1379,7 @@ int update_filesize_cache(struct stat *stbuf, off_t size)
     // Truncate filesize.
     data = search_dbdata(dbp, &stbuf->st_ino, sizeof(unsigned long long));
     if (NULL == data) {
-        LDEBUG("fs_truncate : no inode found to truncate");
+        LDEBUG("update_filesize_cache : inode not found");
         return (-ENOENT);
     }
     ddstat = value_to_ddstat(data);
@@ -1793,7 +1463,7 @@ void update_filesize(unsigned long long inode, unsigned long long fsize,
         memddstat->stbuf.st_size) {
         inobno.inode = inode;
         inobno.blocknr = blocknr;
-        tigerdata = check_block_exists(inobno);
+        tigerdata = check_block_exists(&inobno);
         if (NULL != tigerdata) {
             LDEBUG
                 ("update_filesize : The file has not grown in size and the block exists. This is an updated block. newsize %llu, size %llu",((blocknr * BLKSIZE) + offsetblock + fsize),memddstat->stbuf.st_size);
@@ -1844,7 +1514,6 @@ void update_filesize(unsigned long long inode, unsigned long long fsize,
     DBTfree(ddbuf);
 // Do not flush data until cachesize is reached
     if (memddstat->updated > config->cachesize) {
-        flush_dta_queue();
         hash_update_filesize(memddstat, inode);
         memddstat->updated = 0;
         ddbuf = create_mem_ddbuf(memddstat);
@@ -1855,14 +1524,6 @@ void update_filesize(unsigned long long inode, unsigned long long fsize,
     DBTfree(dataptr);
     EFUNC;
     return;
-}
-
-void flush_dta_queue()
-{
-    FUNC;
-    release_qdta_lock();
-    get_qempty_lock();
-    EFUNC;
 }
 
 void hash_update_filesize(MEMDDSTAT * ddstat, unsigned long long inode)
@@ -1882,306 +1543,30 @@ void hash_update_filesize(MEMDDSTAT * ddstat, unsigned long long inode)
 }
 
 void delete_data_cache_or_db(unsigned char *chksum,
-                             unsigned long long inode)
+                             INOBNO *inobno)
 {
-    DBT *data;
-#ifndef SHA3
-    word64 res[3];
-#endif
-    BLKCACHE *blk;
-    unsigned char *dtiger=NULL;
-    get_moddb_lock();
+    CCACHEDTA *ccachedta;
+    unsigned long long p;
+    char *a=NULL; 
+    int size;
+
+    FUNC;
     if (!tchdbout(dbdta, chksum, config->hashlen)) {
         loghash
             ("delete_data_cache_or_db : hash not found in dbdta, try cache",
              chksum);
-        if (!tcmdbout(dbdtaq, chksum, config->hashlen)) {
-            data =
-                search_memhash(blkcache, &inode,
-                               sizeof(unsigned long long));
-            if (NULL != data) {
-                blk = (BLKCACHE *) data->data;
-#ifdef SHA3
-                dtiger=sha_binhash(blk->blockdata, BLKSIZE);
-#else
-                binhash(blk->blockdata, BLKSIZE, res);
-                dtiger=(unsigned char *)&res;
-#endif
-                loghash
-                    ("delete_data_cache_or_db : dtiger deleted from cache",
-                     dtiger);
-                if (0 == memcmp(dtiger, chksum, config->hashlen)) {
-                    loghash
-                        ("delete_data_cache_or_db : deleted hash form blkcache",
-                         dtiger);
-                    mdelete_key(blkcache, &inode,
-                                sizeof(unsigned long long));
-                } else
-                    die_dataerr("Weird scenes inside the coal mine.");
-#ifdef SHA3
-                free(dtiger);
-#endif
-                DBTfree(data);
-            } else {
-                die_dataerr("Weird scenes inside the coal mine.");
-            }
-        }
-    } else
-        loghash("delete_data_cache_or_db : deleted hash", chksum);
-    release_moddb_lock();
-    return;
-}
-
-/* delete = 1 Do delete dbdata
-   delete = 0 Do not delete dbdta */
-unsigned int db_commit_block(unsigned char *dbdata, unsigned char *chksum,
-                             INOBNO inobno, bool delete)
-{
-    unsigned char *stiger=NULL;
-    compr *compressed;
-    unsigned long long inuse;
-    unsigned int ret = 0;
-#ifndef SHA3 
-    word64 res[3];
-#endif
-
-    FUNC;
-#ifdef SHA3
-    stiger=sha_binhash(dbdata, BLKSIZE);
-#else
-    binhash(dbdata, BLKSIZE, res);
-    stiger=(unsigned char *)&res;
-#endif
-#ifdef LZO
-    compressed = lzo_compress((unsigned char *) dbdata, BLKSIZE);
-#else
-    compressed = clz_compress((unsigned char *) dbdata, BLKSIZE);
-#endif
-    ret = compressed->size;
-    inuse = getInUse(stiger);
-    if (0 == inuse) {
-        loghash("commit_block : write hash with qdta", stiger);
-        qdta(stiger, (DBT *) compressed);
-    } else
-        loghash("commit_block : only updated inuse for hash ", stiger);
-    inuse++;
-    update_inuse(stiger, inuse);
-    comprfree(compressed);
-    write_dbb_to_cache(&inobno,stiger);
-#ifdef SHA3
-    free(stiger);
-#endif
-    return (ret);
-}
-
-void add_blk_to_cache(unsigned long long inode, unsigned long long blocknr,
-                      unsigned char *data)
-{
-    BLKCACHE blk;
-
-    FUNC;
-    blk.blocknr = blocknr;
-    memcpy(&blk.blockdata, data, BLKSIZE);
-    mbin_write_dbdata(blkcache, &inode, sizeof(unsigned long long),
-                      (void *) &blk, sizeof(BLKCACHE));
+    } 
+    a=(char *)tctreeget(rdtree, (void *)inobno, sizeof(INOBNO), &size);
+    if ( NULL != a ) {
+        memcpy(&p,a,size);
+        ccachedta=(CCACHEDTA *)p;
+        tctreeout(cachetree,(void *)inobno, sizeof(INOBNO));               
+        tctreeout(rdtree,(void *)inobno, sizeof(INOBNO));
+        free(ccachedta);
+    }
     EFUNC;
     return;
 }
-
-/* mode = 0 -> update the block and delete dbdta
-   mode = 1 -> flush the inode
-   mode = 2 -> dbdta has not been written so don't delete
-*/
-DBT *try_block_cache(unsigned long long inode, unsigned long long blocknr,
-                     unsigned int mode)
-{
-    DBT *retdata = NULL;
-    DBT *data;
-    DBT *tigerdata = NULL;
-    INOBNO inobno;
-    BLKCACHE *blk;
-
-    FUNC;
-    data = search_memhash(blkcache, &inode, sizeof(unsigned long long));
-    if (data != NULL) {
-        blk = (BLKCACHE *) data->data;
-        if ((blocknr == blk->blocknr) && (mode != 1)) {
-            retdata = s_malloc(sizeof(DBT));
-            retdata->size = BLKSIZE;
-            retdata->data = s_malloc(BLKSIZE);
-            memcpy(retdata->data, blk->blockdata, BLKSIZE);
-        } else {
-            inobno.inode = inode;
-            inobno.blocknr = blk->blocknr;
-            tigerdata = check_block_exists(inobno);
-            if (NULL == tigerdata) {
-                mode = 2;
-            }
-            if (mode == 2) {
-                if (NULL != config->blockdatabs) {
-                    db_commit_block(blk->blockdata, NULL, inobno, 0);
-                } else {
-                    file_commit_block(blk->blockdata, NULL, inobno, 0);
-                }
-            } else {
-                if (NULL != config->blockdatabs) {
-                    db_commit_block(blk->blockdata, tigerdata->data,
-                                    inobno, 1);
-                } else {
-                    file_commit_block(blk->blockdata, tigerdata->data,
-                                      inobno, 1);
-                }
-            }
-            if (NULL != tigerdata)
-                DBTfree(tigerdata);
-            mdelete_key(blkcache, &inode, sizeof(unsigned long long));
-            memset(blk->blockdata, 0, BLKSIZE);
-        }
-        DBTfree(data);
-    }
-    return retdata;
-}
-
-void db_update_block(const char *blockdata, unsigned long long blocknr,
-                     unsigned int offsetblock,
-                     unsigned long long size, unsigned long long inode,
-                     unsigned char *chksum)
-{
-    DBT *data;
-    DBT *cachedata;
-    unsigned char *dbdata;
-    INOBNO inobno;
-    compr *uncompdata;
-    BLKCACHE *blk;
-    unsigned char *dtiger=NULL;
-    unsigned long long inuse;
-#ifdef ENABLE_CRYPTO
-    DBT *encrypted;
-#endif
-#ifndef SHA3
-    word64 res[3];
-#endif
-
-    FUNC;
-    LDEBUG
-        ("updateBlock : inode %llu blocknr %llu offsetblock %llu, size %llu",
-         inode, blocknr, (unsigned long long) offsetblock,
-         (unsigned long long) size);
-    inobno.inode = inode;
-    inobno.blocknr = blocknr;
-
-    dbdata = s_malloc(BLKSIZE);
-    memset(dbdata, 0, BLKSIZE);
-    data = try_block_cache(inode, blocknr, 0);
-    if (NULL != data) {
-        memcpy(dbdata, data->data, data->size);
-        memcpy(dbdata + offsetblock, blockdata, size);
-        add_blk_to_cache(inode, blocknr, dbdata);
-        update_filesize(inode, size, offsetblock, blocknr, 0, 0, 0);
-        free(dbdata);
-        DBTfree(data);
-        return;
-    } else
-        LDEBUG("update_block: block not found in cache.");
-
-// We don't need the old blockdata when we overwrite it completely anyway.
-
-    if (offsetblock > 0 || size < BLKSIZE) {
-// First read the cache
-        get_moddb_lock();
-        data = search_memhash(dbdtaq, chksum, config->hashlen);
-        if (NULL == data) {
-            LDEBUG("updateBlock : Not in dbdtaq");
-#ifdef ENABLE_CRYPTO
-            encrypted = search_dbdata(dbdta, chksum, config->hashlen);
-            if (NULL == encrypted) {
-#else
-            data = search_dbdata(dbdta, chksum, config->hashlen);
-            if (NULL == data) {
-#endif
-                LDEBUG("updateBlock : Not in dbdta");
-                cachedata =
-                    search_memhash(blkcache, &inobno.inode,
-                                   sizeof(unsigned long long));
-                if (NULL != cachedata) {
-                    blk = (BLKCACHE *) cachedata->data;
-#ifdef SHA3
-                    dtiger=sha_binhash(blk->blockdata, BLKSIZE);
-#else
-                    binhash(blk->blockdata, BLKSIZE, res);
-                    dtiger=(unsigned char *)&res;
-#endif
-                    if (0 == memcmp(dtiger, chksum, config->hashlen)) {
-                        data = s_malloc(sizeof(DBT));
-                        data->data = s_malloc(BLKSIZE);
-                        data->size = BLKSIZE;
-                        memcpy(data->data, blk->blockdata, BLKSIZE);
-                        DBTfree(cachedata);
-                    } else {
-                        LDEBUG
-                            ("updateBlock : Not in dbcache, out of luck.");
-                        loghash("updateBlock : No data found to read ",
-                                chksum);
-                        die_dataerr
-                            ("No data found to read, this should never happen: inode :%llu: blocknr :%llu",
-                             inode, blocknr);
-                    }
-#ifdef SHA3
-                    free(dtiger);
-#endif
-                } else {
-                    loghash("updateBlock : No data found to read ",
-                            chksum);
-                    die_dataerr
-                        ("No data found to read, this should never happen: inode :%llu: blocknr :%llu",
-                         inode, blocknr);
-                }
-#ifndef ENABLE_CRYPTO
-            }
-#else
-            } else {
-                if (config->encryptdata) {
-                    data = decrypt(encrypted);
-                    DBTfree(encrypted);
-                } else
-                    data = encrypted;
-            }
-#endif
-        }
-        release_moddb_lock();
-        if (data->size < BLKSIZE) {
-#ifdef LZO
-            uncompdata = lzo_decompress(data->data, data->size);
-#else
-            LDEBUG("uncomp data");
-            uncompdata = clz_decompress(data->data, data->size);
-            LDEBUG("done uncomp data");
-#endif
-            LDEBUG("got uncompsize : %lu", uncompdata->size);
-            memcpy(dbdata, uncompdata->data, uncompdata->size);
-            comprfree(uncompdata);
-        } else {
-            LDEBUG("Got data->size %lu", data->size);
-            memcpy(dbdata, data->data, data->size);
-        }
-        DBTfree(data);
-    }
-    memcpy(dbdata + offsetblock, blockdata, size);
-    add_blk_to_cache(inode, blocknr, dbdata);
-    inuse = getInUse(chksum);
-    if (inuse <= 1) {
-        delete_inuse(chksum);
-        delete_data_cache_or_db(chksum, inode);
-    } else {
-        inuse--;
-        update_inuse(chksum, inuse);
-    }
-    update_filesize(inode, size, offsetblock, blocknr, 0, 0, 0);
-    free(dbdata);
-    EFUNC;
-    return;
-}
-
 
 int btdelete_curkey(TCBDB * db, void *key, int keylen, void *kvalue,
                     int kvallen)
@@ -2335,116 +1720,13 @@ void ndelete_key(TCNDB * db, void *keydata, int len)
 }
 
 
-DBT *check_block_exists(INOBNO inobno)
+DBT *check_block_exists(INOBNO *inobno)
 {
     DBT *data = NULL;
-    DBT *cachedata = NULL;
-    BLKCACHE *blk;
-#ifdef SHA3
-    BitSequence *hashval;
-#else
-    word64 res[3];
-#endif
-
     FUNC;
-    get_dbb_lock();
-    data = search_memhash(dbbm, &inobno, sizeof(INOBNO));
-    if ( NULL == data ) {
-       data = search_dbdata(dbb, &inobno, sizeof(INOBNO));
-    }
-    release_dbb_lock();
-    if (NULL == data) {
-        cachedata =
-            search_memhash(blkcache, &inobno.inode,
-                           sizeof(unsigned long long));
-        if (cachedata != NULL) {
-            blk = (BLKCACHE *) cachedata->data;
-            if ((inobno.blocknr == blk->blocknr)) {
-                LDEBUG("check_block_exists : found  blocknr %llu in blkcache",inobno.blocknr);
-                data = s_malloc(sizeof(DBT));
-                data->size = config->hashlen;
-#ifdef SHA3
-                data->data=sha_binhash(blk->blockdata, BLKSIZE);
-                memcpy(data->data,&hashval,config->hashlen);
-#else
-                data->data=s_malloc(config->hashlen);
-                binhash(blk->blockdata, BLKSIZE, res);
-                memcpy(data->data,&res,config->hashlen);
-#endif
-            } else {
-                LDEBUG("check_block_exists : %llu-%llu not found",
-                       inobno.inode, inobno.blocknr);
-            }
-            DBTfree(cachedata);
-        } else {
-            LDEBUG("check_block_exists : %llu-%llu not found",
-                   inobno.inode, inobno.blocknr);
-            return NULL;
-        }
-    }
+    data = search_dbdata(dbb, inobno, sizeof(INOBNO));
+    EFUNC;
     return data;
-}
-
-void wait_io_pending(unsigned long long inode)
-{
-    int c;
-
-    FUNC;
-  iowait:
-    get_global_lock();
-    for (c = 0; c < max_threads; c++) {
-        if (0 == tdta[c]->inode)
-            continue;
-        if (tdta[c]->inode == inode) {
-            release_global_lock();
-            goto iowait;
-        }
-    }
-    EFUNC;
-    return;
-}
-
-void wait_inode_block_pending(unsigned long long inode,
-                              unsigned long long blocknr)
-{
-    int c;
-
-    FUNC;
-  iobp:
-    get_global_lock();
-    for (c = 0; c < max_threads; c++) {
-        if (0 == tdta[c]->inode)
-            continue;
-        if (tdta[c]->inode == inode) {
-            if (tdta[c]->blocknr == blocknr) {
-                release_global_lock();
-                LDEBUG("wait_inode_block_pending : loop");
-                goto iobp;
-            }
-        }
-    }
-    EFUNC;
-    return;
-}
-
-int inode_block_pending(unsigned long long inode,
-                        unsigned long long blocknr)
-{
-    int c;
-    int pending = 0;
-
-    FUNC;
-    for (c = 0; c < max_threads; c++) {
-        if (0 == tdta[c]->inode)
-            continue;
-        if (tdta[c]->inode == inode) {
-            if (tdta[c]->blocknr == blocknr)
-                pending = 1;
-            break;
-        }
-    }
-    EFUNC;
-    return (pending);
 }
 
 int db_unlink_file(const char *path)
@@ -2460,7 +1742,6 @@ int db_unlink_file(const char *path)
     unsigned long long inode;
     unsigned long long counter = 0;
     unsigned long long inuse;
-    unsigned long long done = 0;
     time_t thetime;
     void *vdirnode;
     DBT *bdata;
@@ -2478,6 +1759,7 @@ int db_unlink_file(const char *path)
     if (res == -ENOENT)
         return (res);
     inode = st.st_ino;
+    flush_abort(inode);
     haslinks = st.st_nlink;
     thetime = time(NULL);
     dname = s_dirname((char *) path);
@@ -2491,19 +1773,15 @@ int db_unlink_file(const char *path)
         LDEBUG("unlink symlink done %s", path);
     }
     inobno.inode = inode;
-    inobno.blocknr = counter;
-    while (done < st.st_size) {
-        get_dbb_lock();
-        bdata = search_memhash(dbbm, &inobno, sizeof(INOBNO));
-        if ( NULL == bdata ) {
-           bdata = search_dbdata(dbb, &inobno, sizeof(INOBNO));
-        }
-        release_dbb_lock();
+    inobno.blocknr = st.st_size/BLKSIZE;
+    if ( inobno.blocknr * BLKSIZE  < st.st_size ) inobno.blocknr++;
+
+// Start deleting the actual data blocks.
+    while (1) {
+        bdata = search_dbdata(dbb, &inobno, sizeof(INOBNO));
         if (bdata == NULL) {
-            LDEBUG("%llu is sparse", counter);
-            done = done + BLKSIZE;
-            counter++;
-            inobno.blocknr = counter;
+            if ( inobno.blocknr == 0 ) break;
+            inobno.blocknr--;
             continue;
         }
         stiger = s_malloc(bdata->size);
@@ -2530,9 +1808,8 @@ int db_unlink_file(const char *path)
                    inobno.blocknr);
             delete_dbb(&inobno);
         }
-        counter++;
-        inobno.blocknr = counter;
-        done = done + BLKSIZE;
+        if ( inobno.blocknr == 0 ) break;
+        inobno.blocknr--;
     }
     if (haslinks == 1) {
         if (0 !=
@@ -2652,6 +1929,46 @@ int fs_mkdir(const char *path, mode_t mode)
     return (res);
 }
 
+unsigned int db_commit_block(unsigned char *dbdata, unsigned char *chksum,
+                             INOBNO inobno, bool delete)
+{
+    unsigned char *stiger=NULL;
+    compr *compressed;
+    unsigned long long inuse;
+    unsigned int ret = 0;
+#ifndef SHA3 
+    word64 res[3];
+#endif
+
+    FUNC;
+#ifdef SHA3
+    stiger=sha_binhash(dbdata, BLKSIZE);
+#else
+    binhash(dbdata, BLKSIZE, res);
+    stiger=(unsigned char *)&res;
+#endif
+#ifdef LZO
+    compressed = lzo_compress((unsigned char *) dbdata, BLKSIZE);
+#else
+    compressed = clz_compress((unsigned char *) dbdata, BLKSIZE);
+#endif
+    ret = compressed->size;
+    inuse = getInUse(stiger);
+    if (0 == inuse) {
+        loghash("commit_block : write hash with qdta", stiger);
+        bin_write_dbdata(dbdta,stiger,config->hashlen,compressed->data,compressed->size);
+    } else
+        loghash("commit_block : only updated inuse for hash ", stiger);
+    inuse++;
+    update_inuse(stiger, inuse);
+    comprfree(compressed);
+    bin_write_dbdata(dbb,(char *)&inobno,sizeof(INOBNO),stiger,config->hashlen);
+#ifdef SHA3
+    free(stiger);
+#endif
+    return (ret);
+}
+
 void partial_truncate_block(struct stat *stbuf, unsigned long long blocknr,
                             unsigned int offset)
 {
@@ -2662,28 +1979,27 @@ void partial_truncate_block(struct stat *stbuf, unsigned long long blocknr,
     DBT *encrypted;
     unsigned char *stiger;
     unsigned long long inuse;
-
-
+    char *cdata;
+    int vsize;
+    unsigned long long p;
+    CCACHEDTA *ccachedta;
+    int fromcache=0;
+    
     FUNC;
     LDEBUG("partial_truncate_block : inode %llu, blocknr %llu, offset %u",
            stbuf->st_ino, blocknr, offset);
     inobno.inode = stbuf->st_ino;
     inobno.blocknr = blocknr;
-    get_dbb_lock();
-    data = search_memhash(dbbm, &inobno, sizeof(INOBNO));
-    if ( NULL == data ) {
-       data = search_dbdata(dbb, &inobno, sizeof(INOBNO));
-    }
-    release_dbb_lock();
+
+    data = search_dbdata(dbb, &inobno, sizeof(INOBNO));
     if (NULL == data) {
-        LDEBUG("Deletion of non existent block.");
+        LDEBUG("Deletion of non existent block?");
         return;
     }
     stiger = s_malloc(data->size);
     memcpy(stiger, data->data, data->size);
     DBTfree(data);
-    data = search_memhash(dbdtaq, stiger, config->hashlen);
-    if ( NULL == data ) {
+
 #ifdef ENABLE_CRYPTO
     if (config->encryptdata){
       encrypted=search_dbdata(dbdta, stiger, config->hashlen);
@@ -2691,26 +2007,28 @@ void partial_truncate_block(struct stat *stbuf, unsigned long long blocknr,
       DBTfree(encrypted);
     } else data = search_dbdata(dbdta, stiger, config->hashlen);
 #else
-       data = search_dbdata(dbdta, stiger, config->hashlen);
+    data = search_dbdata(dbdta, stiger, config->hashlen);
 #endif
-    }
     if ( NULL == data ) {
         die_dataerr("Hmmm, did not expect this to happen.");
     }
     inuse = getInUse(stiger);
     if (inuse == 1) {
-        loghash("partial_truncate_block : delete hash", stiger);
+        //log_fatal_hash("partial_truncate_block : delete hash", stiger);
         delete_inuse(stiger);
         delete_dbb(&inobno);
-        delete_data_cache_or_db(stiger,inobno.inode);
+        if (!tchdbout(dbdta, stiger, config->hashlen)) {
+           log_fatal_hash("Failed to delete hash",stiger);
+           LFATAL("Could not delete %llu-%llu",inobno.inode,inobno.blocknr);
+           die_dataerr("partial_truncate_block : Could not delete expected data");
+        }
     } else {
         if (inuse > 1)
             inuse--;
         delete_dbb(&inobno);
         update_inuse(stiger, inuse);
     }
-    blockdata = s_malloc(BLKSIZE);
-    memset(blockdata, 0, BLKSIZE);
+    blockdata = s_zmalloc(BLKSIZE);
     if (data->size != BLKSIZE) {
 #ifdef LZO
         uncompdata = lzo_decompress(data->data, data->size);
@@ -2740,6 +2058,11 @@ int db_fs_truncate(struct stat *stbuf, off_t size, char *bname)
     DBT *data;
     INOBNO inobno;
     time_t thetime;
+    char *cdata;
+    int vsize;
+    unsigned long long p;
+    CCACHEDTA *ccachedta;
+    int fromcache=0;
 
     FUNC;
     LDEBUG("lessfs_truncate inode %llu - size %llu", stbuf->st_ino,
@@ -2753,19 +2076,15 @@ int db_fs_truncate(struct stat *stbuf, off_t size, char *bname)
     update_filesize_cache(stbuf, size);
     LDEBUG("lessfs_truncate : truncate new block %llu, oldblock %llu",
            blocknr, lastblocknr);
+    inobno.inode = stbuf->st_ino;
     while (lastblocknr >= blocknr) {
+        fromcache=0;
         if ( offsetblock != 0 && lastblocknr == blocknr ) break;
         LDEBUG
             ("lessfs_truncate : Enter loop lastblocknr %llu : blocknr %llu",
              lastblocknr, blocknr);
-        inobno.inode = stbuf->st_ino;
         inobno.blocknr = lastblocknr;
-        get_dbb_lock();
-        data = search_memhash(dbbm, &inobno, sizeof(INOBNO));
-        if ( NULL == data ) {
-           data = search_dbdata(dbb, &inobno, sizeof(INOBNO));
-        }
-        release_dbb_lock();
+        data = search_dbdata(dbb, &inobno, sizeof(INOBNO));
         if (NULL == data) {
             LDEBUG
                 ("Deletion of non existent block inode : %llu, blocknr %llu",
@@ -2785,11 +2104,14 @@ int db_fs_truncate(struct stat *stbuf, off_t size, char *bname)
         DBTfree(data);
         inuse = getInUse(stiger);
         if (inuse == 1) {
-            sync_flush_dtaq();
             loghash("truncate : delete hash", stiger);
-            delete_data_cache_or_db(stiger,inobno.inode);
             delete_inuse(stiger);
             delete_dbb(&inobno);
+            if (!tchdbout(dbdta, stiger, config->hashlen)) {
+                 log_fatal_hash("Failed to delete hash",stiger);
+                 LFATAL("Could not delete %llu-%llu",inobno.inode,inobno.blocknr);
+                 die_dataerr("Could not delete expected data");
+            }
         } else {
             if (inuse > 1)
                 inuse--;
@@ -2804,116 +2126,6 @@ int db_fs_truncate(struct stat *stbuf, off_t size, char *bname)
     if (0 != offsetblock)
         partial_truncate_block(stbuf, lastblocknr, offsetblock);
     return (0);
-}
-
-void db_sync_flush_dtaq()
-{
-    unsigned char *kdata;
-    unsigned char *vdata;
-    int ksize;
-    int vsize;
-#ifdef ENABLE_CRYPTO
-    DBT *encrypted;
-#endif
-
-    get_moddb_lock();
-    /* traverse records */
-    tcmdbiterinit(dbdtaq);
-    while ((kdata = tcmdbiternext(dbdtaq, &ksize)) != NULL) {
-        vdata = tcmdbget(dbdtaq, kdata, ksize, &vsize);
-        if (NULL == vdata) {
-            LFATAL("sync_flush_dtaq : no more value for key, this should never happen!");
-            continue;
-        }
-        loghash("sync_flush_dtaq : flush to disk", kdata);
-#ifdef ENABLE_CRYPTO
-        if (config->encryptdata) {
-            encrypted = encrypt(vdata, vsize);
-            bin_write_dbdata(dbdta, kdata, ksize,
-                             encrypted->data, encrypted->size);
-            DBTfree(encrypted);
-        } else {
-            bin_write_dbdata(dbdta, kdata, ksize, vdata, vsize);
-        }
-#else
-        bin_write_dbdata(dbdta, kdata, ksize, vdata, vsize);
-#endif
-        mdelete_key(dbdtaq, kdata, ksize);
-        free(kdata);
-        free(vdata);
-    }
-    release_moddb_lock();
-    LDEBUG("sync_flush_dtaq : released qempty lock");
-    return;
-}
-
-int sync_flush_dbu()
-{
-    unsigned char *kdata;
-    unsigned char *vdata;
-    int ksize;
-    int vsize;
-    int ret=0;
-
-    FUNC;
-
-    get_dbu_lock();
-    tcmdbiterinit(dbum);
-    while ((kdata = tcmdbiternext(dbum, &ksize)) != NULL) {
-           vdata = tcmdbget(dbum, kdata, ksize, &vsize);
-           if (NULL == vdata) {
-               LFATAL("This should never happen : black magic in sync_flush_dbu");
-               continue;
-           }
-           bin_write_dbdata(dbu, kdata, ksize, vdata, vsize);
-           mdelete_key(dbum, kdata, ksize);
-           dbu_qcount--;
-        ret=1;
-        free(kdata);
-        free(vdata);
-    }
-    release_dbu_lock();
-    EFUNC;
-    return(ret);
-}
-
-int sync_flush_dbb()
-{
-    unsigned char *kdata;
-    unsigned char *vdata;
-    int ksize;
-    int vsize;
-    int ret=0;
-
-    FUNC;
-    get_dbb_lock();
-    tcmdbiterinit(dbbm);
-    while ((kdata = tcmdbiternext(dbbm, &ksize)) != NULL) {
-           vdata = tcmdbget(dbbm, kdata, ksize, &vsize);
-           if (NULL == vdata) {
-               release_dbb_lock();
-               continue;
-           }
-           bin_write_dbdata(dbb, kdata, ksize, vdata, vsize);
-           mdelete_key(dbbm, kdata, ksize);
-           dbb_qcount--;
-        ret=1;
-        free(kdata);
-        free(vdata);
-    }
-    release_dbb_lock();
-    EFUNC;
-    return(ret);
-}
-
-void sync_flush_dtaq()
-{
-    if (NULL != config->blockdatabs) {
-        db_sync_flush_dtaq();
-    } else {
-        file_sync_flush_dtaq();
-    }
-    return;
 }
 
 int update_parent_time(char *path, int linkcount)
@@ -3629,6 +2841,7 @@ void parseconfig(int mklessfs)
             config->freelist = read_val("FREELIST_PATH");
             config->freelistbs = read_val("FREELIST_BS");
             LINFO("The selected data store is file_io.");
+            die_dataerr("file_io is not yet supported in lessfs2");
         } else
             config->blockdatabs = read_val("BLOCKDATA_BS");
     }
@@ -3707,7 +2920,7 @@ void parseconfig(int mklessfs)
     if (cs <= 0)
         cs = 30;
     config->flushtime = cs;
-    LINFO("cache %u data blocks", config->cachesize);
+    LINFO("cache %llu data blocks", config->cachesize);
 
 #ifdef SHA3
     LINFO("The Blue Midnight Wish hash has been selected.");
@@ -3964,7 +3177,6 @@ void lessfs_trans_stamp()
     timeinfo = localtime ( &tdate );
     ldate=tdate;
     LDEBUG("lessfs_trans_stamp : filesystem commit at %s",asctime(timeinfo));
-    get_dbu_lock();
     if ( NULL == config->blockdatabs) {
        finuse.inuse=ldate;
        finuse.size=0;
@@ -3975,27 +3187,173 @@ void lessfs_trans_stamp()
        bin_write_dbdata(dbu, config->commithash, config->hashlen, (unsigned char *)&ldate,
                         sizeof(unsigned long long));
     }
-    release_dbu_lock();
     return;
 }
 
-
-void lessfs_snap_stamp()
+DBT *search_nhash(TCNDB * db, void *key, int len)
 {
-    INUSE finuse;
+    DBT *data;
+    int size;
 
-    LDEBUG("lessfs_snap_stamp : %ul", config->cursnap);
-    get_dbu_lock();
-    if ( NULL == config->blockdatabs) {
-       finuse.inuse=config->cursnap;
-       finuse.size=0;
-       finuse.offset=0;
-       bin_write_dbdata(dbu, config->cursnaphash, config->hashlen, (unsigned char *)&finuse,
-                        sizeof(INUSE));
-    } else {
-       bin_write_dbdata(dbu, config->cursnaphash, config->hashlen, (unsigned char *)&config->cursnap,
-                        sizeof(unsigned long));
+    FUNC;
+    data = s_malloc(sizeof(DBT));
+    data->data = tcndbget(db, key, len, &size);
+    data->size = (unsigned long) size;
+    if (NULL == data->data) {
+        LDEBUG("search_nhash : return NULL");
+        free(data);
+        data = NULL;
+    } else
+        LDEBUG("search_nhash : return %lu bytes", data->size);
+    EFUNC;
+    return data;
+}
+
+void flush_abort(unsigned long long inode)
+{
+    char *key;
+    int size;
+    int vsize;
+    char *val;
+    unsigned long long p;
+    INOBNO *inobno;
+    CCACHEDTA *ccachedta;
+
+    tctreeiterinit(rdtree);
+    while ( NULL != (key=(char *)tctreeiternext(rdtree, &size))){
+       val=(char *)tctreeget(rdtree, (void *)key, size, &vsize);
+       if ( NULL != val ) {
+          memcpy(&p,val,vsize);
+          ccachedta=(CCACHEDTA *)p;
+          inobno=(INOBNO *)key;
+          if ( inode == inobno->inode ) {
+             tctreeout(cachetree,key,size);
+             tctreeout(rdtree,key,size);
+             free(ccachedta);
+          }
+       }
     }
-    release_dbu_lock();
     return;
 }
+
+void flush_wait(unsigned long long inode)
+{
+   char *key;
+    int size;
+    int vsize;
+    char *val;
+    unsigned long long p;
+    INOBNO *inobno;
+    CCACHEDTA *ccachedta;
+
+    tctreeiterinit(rdtree);
+    while ( NULL != (key=(char *)tctreeiternext(rdtree, &size))){
+       val=(char *)tctreeget(rdtree, (void *)key, size, &vsize);
+       if ( NULL != val ) {
+          memcpy(&p,val,vsize);
+          ccachedta=(CCACHEDTA *)p;
+          inobno=(INOBNO *)key;
+          if ( inode == inobno->inode ) {
+             cook_cache(key, size, ccachedta);
+             tctreeout(cachetree,key,size);
+             tctreeout(rdtree,key,size);
+             free(ccachedta);
+          }
+       }
+    }
+    return;
+}
+
+// Both tiger_lock and global_lock need to be set.
+void flush_queue(unsigned long long inode, bool force) {
+    char *key;
+    int size;
+    int vsize;
+    char *val;
+    unsigned long long p;
+    INOBNO *inobno;
+    CCACHEDTA *ccachedta;
+
+    tctreeiterinit(rdtree);
+    while ( NULL != (key=(char *)tctreeiternext(rdtree, &size))){
+       val=(char *)tctreeget(rdtree, (void *)key, size, &vsize);
+       if ( NULL != val ) {
+          memcpy(&p,val,vsize);
+          ccachedta=(CCACHEDTA *)p;
+          inobno=(INOBNO *)key;
+          if ( ccachedta->dirty == 1 ) {
+             if ( ccachedta->pending != 1 ) {
+// The processing threads will now pickup the block
+                if ( inode == 0 ) {
+                   tctreeput(cachetree, (void *)inobno, sizeof(INOBNO), (void *)&p, sizeof(unsigned long long));
+                } else {
+                   if ( inode == inobno->inode ) {
+                      LDEBUG("Flush specified inode %llu ->  %llu-%llu from the cache",inode,inobno->inode,inobno->blocknr);
+                      tctreeput(cachetree, (void *)inobno, sizeof(INOBNO), (void *)&p, sizeof(unsigned long long));
+                   }
+                }
+             }
+          } else {
+// The block is not dirty, eg written to disk and has been in the cache to long.
+// Remove it...
+             if ( ccachedta->creationtime + CACHE_MAX_AGE < time(NULL) ) {
+                 LDEBUG("Remove aged %llu-%llu from the cache",inobno->inode,inobno->blocknr);
+                 tctreeout(cachetree,key,size);
+                 tctreeout(rdtree,key,size);
+                 free(ccachedta);
+             } else {
+                 if ( force ) {
+                    LDEBUG("Force %llu-%llu from the cache",inobno->inode,inobno->blocknr);
+                    tctreeout(cachetree,key,size);
+                    tctreeout(rdtree,key,size);
+                    free(ccachedta);
+                 }
+             }
+          }
+       }
+    }
+    LDEBUG("Database rdtree now holds %llu records and has size %llu",tctreernum(rdtree),tctreemsiz(rdtree));
+    LDEBUG("Database cachetree now holds %llu records and has size %llu",tctreernum(cachetree),tctreemsiz(cachetree));
+    return;
+}
+
+void cook_cache(char *key, int ksize, CCACHEDTA *ccachedta)
+{
+    char *hash;
+    compr *compressed;
+    INOBNO *inobno;
+    unsigned long long inuse;
+#ifndef SHA3
+    word64 *res;
+#endif
+
+   inobno=(INOBNO *)key;
+   LDEBUG("cook_cache : %llu-%llu",inobno->inode,inobno->blocknr);
+#ifdef SHA3
+   hash=sha_binhash(&ccachedta->data, BLKSIZE);
+   memcpy(&ccachedta->hash,hash,MAX_HASH_LEN);
+   free(hash);
+#else
+   binhash(ccachedta->data, BLKSIZE,(word64 *)ccachedta->hash);
+#endif
+   inuse = getInUse((char *)&ccachedta->hash);
+   if (inuse == 0) {
+#ifdef LZO
+      compressed =
+            lzo_compress(ccachedta->data, BLKSIZE);
+#else
+      compressed =
+            clz_compress(ccachedta->data, BLKSIZE);
+#endif
+      bin_write_dbdata(dbdta,&ccachedta->hash,config->hashlen,compressed->data,compressed->size);
+      comprfree(compressed);
+   }
+   bin_write_dbdata(dbb,(char *)inobno,sizeof(INOBNO),ccachedta->hash,config->hashlen);
+   inuse++;
+   update_inuse((char *)&ccachedta->hash, inuse);
+   ccachedta->dirty=0;
+   ccachedta->pending=0;
+   LDEBUG("cook_cache : %llu-%llu evicted from cache",inobno->inode,inobno->blocknr);
+   return;
+}
+

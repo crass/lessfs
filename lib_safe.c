@@ -173,6 +173,17 @@ void *s_malloc(size_t size)
     return retval;
 }
 
+void *s_zmalloc(size_t size)
+{
+    void *retval;
+
+    retval = malloc(size);
+    if (!retval)
+        ERRHANDLE("Out of memory : malloc failed on alloc %lu bytes.\n",
+                  (unsigned long) size);
+    memset(retval,0,size);
+    return retval;
+}
 
 char *s_fgets(int size, FILE *stream)
 {

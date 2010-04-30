@@ -728,9 +728,6 @@ int main(int argc, char *argv[])
        printf("Press ctrl-c within 5 secondes when you are not sure that the filesystem is unmounted.\n");
        sleep(5);
     }
-    pthread_spin_init(&moddb_spinlock, 0);
-    pthread_spin_init(&dbu_spinlock, 0);
-    pthread_spin_init(&dbb_spinlock, 0);
     BLKSIZE=get_blocksize();
     if ( NULL != config->blockdatabs ){
        printf("**************************************************\n");

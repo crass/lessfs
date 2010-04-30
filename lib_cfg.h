@@ -40,15 +40,13 @@ struct configdata {
     char *commithash;
     unsigned char *iv;
     unsigned char *passwd;
-    unsigned int cachesize;
+    unsigned long long cachesize;
     unsigned int flushtime;
     unsigned int inspectdiskinterval;
     unsigned int defrag;
     unsigned int relax;
     unsigned int encryptdata;
     unsigned int encryptmeta;
-    unsigned char *cursnaphash;
-    unsigned long cursnap;
     int hashlen;
     int transactions;
 };

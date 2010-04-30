@@ -30,7 +30,6 @@ typedef struct {
 } FLIST;
 
 INUSE *file_get_inuse(unsigned char *);
-void add_file_block(BLKDTA *);
 unsigned int file_commit_block(unsigned char *, unsigned char *, INOBNO,
                                bool);
 void file_sync_flush_dtaq();

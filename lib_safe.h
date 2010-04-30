@@ -20,6 +20,7 @@
  */
 #define ERRHANDLE(f...){ LFATAL(f); exitFunc(); }
 void *s_malloc(size_t);
+void *s_zmalloc(size_t);
 char *s_strdup(const char *);
 FILE *s_fopen(char *, char *);
 int s_open(const char *, int);
