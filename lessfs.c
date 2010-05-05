@@ -978,28 +978,6 @@ void freeze_nospace(char *dbpath)
     LFATAL("Resuming IO : sufficient space available.");
 }
 
-void *queue_gard(void *arg)
-{
-   while(1)
-   {
-      sleep(1);
-      if ( config->cachesize/2 < tctreernum(rdtree)*sizeof(CCACHEDTA) ||\
-           config->cachesize/2 < tctreernum(cachetree)*sizeof(CCACHEDTA)){
-         LDEBUG("queue_gard : force to drain the cache");
-         get_global_lock();
-         write_lock();
-         while (wait_pending()) {
-            release_write_lock();
-            usleep(100000);
-            write_lock();
-         }
-         flush_queue(0, 1); 
-         release_write_lock();
-         release_global_lock();
-      }
-   }
-}
-
 void exec_clean_program()
 {
    char *program;
@@ -1472,7 +1450,6 @@ static void *lessfs_init()
     pthread_t ioctl_thread;
     pthread_t housekeeping_thread;
     pthread_t flush_thread;
-    pthread_t queue_gard_thread;
 
     for (count = 0; count < max_threads; count++) {
         cnt = s_malloc(sizeof(int));
@@ -1489,12 +1466,6 @@ static void *lessfs_init()
     ret = pthread_create(&flush_thread, NULL, lessfs_flush, (void *) NULL);
     if (ret != 0)
         die_syserr();
-
-// ALs het fout gaat...
-// Ja, dit is de oorzaak!
-    //ret = pthread_create(&queue_gard_thread, NULL, queue_gard, (void *) NULL);
-    //if (ret != 0)
-    //    die_syserr();
     ret =
         pthread_create(&housekeeping_thread, NULL, housekeeping_worker,
                        (void *)NULL);
