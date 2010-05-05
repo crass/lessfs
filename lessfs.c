@@ -54,6 +54,9 @@
 #include <sys/vfs.h>
 #include <sys/time.h>
 #include <sys/resource.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+
 
 #include <tcutil.h>
 #include <tchdb.h>
@@ -160,8 +163,6 @@ void dbsync()
 static int lessfs_getattr(const char *path, struct stat *stbuf)
 {
     int res;
-    int c;
-
     FUNC;
     LDEBUG("lessfs_getattr %s", path);
     res = check_path_sanity(path);
@@ -403,8 +404,6 @@ static int lessfs_truncate(const char *path, off_t size)
     int res = 0;
     struct stat *stbuf;
     char *bname;
-    DBT *data;
- 
     get_global_lock();
     bname = s_basename((char *) path);
     stbuf = s_malloc(sizeof(struct stat));
@@ -417,11 +416,17 @@ static int lessfs_truncate(const char *path, off_t size)
         release_global_lock();
         return (-EISDIR);
     }
+
     LDEBUG("lessfs_truncate : %s truncate from %llu to %llu",path,stbuf->st_size,size);
     /* Flush the blockcache before we continue. */
     flush_wait(stbuf->st_ino);
-    wait_pending();
-    write_lock();
+    write_lock(); 
+    while (wait_pending()) {
+       flush_wait(stbuf->st_ino);
+       release_write_lock();
+       usleep(100000);
+       write_lock();
+    }
     if ( size < stbuf->st_size ) {
     //if ( size < stbuf->st_size || size == 0 ) {
        if (NULL != config->blockdatabs) {
@@ -641,6 +646,7 @@ CCACHEDTA *update_stored(char *hash, INOBNO *inobno, off_t offsetblock)
    ccachedta->dirty=1;
    ccachedta->pending=0;
 
+   group_lock();
 #ifdef ENABLE_CRYPTO
    encrypted = search_dbdata(dbdta, hash, config->hashlen);
    if (NULL == encrypted) {
@@ -661,6 +667,7 @@ CCACHEDTA *update_stored(char *hash, INOBNO *inobno, off_t offsetblock)
    }
 #endif
    if (data->size < BLKSIZE) {
+      compress_lock();
 #ifdef LZO
       uncompdata = lzo_decompress(data->data, data->size);
 #else
@@ -671,6 +678,7 @@ CCACHEDTA *update_stored(char *hash, INOBNO *inobno, off_t offsetblock)
       LDEBUG("got uncompsize : %lu", uncompdata->size);
       memcpy(&ccachedta->data, uncompdata->data, uncompdata->size);
       comprfree(uncompdata);
+      release_compress_lock();
    } else {
       LDEBUG("Got data->size %lu", data->size);
       memcpy(&ccachedta->data, data->data, data->size);
@@ -689,6 +697,7 @@ CCACHEDTA *update_stored(char *hash, INOBNO *inobno, off_t offsetblock)
         inuse--;
         update_inuse(hash, inuse);
    }
+   release_group_lock();
    EFUNC;
    return ccachedta;
 }
@@ -705,6 +714,7 @@ void add2cache (INOBNO *inobno, const char *buf, off_t offsetblock, size_t bsize
    update_filesize(inobno->inode, bsize, offsetblock,
                    inobno->blocknr, 0, BLKSIZE, 0);
    FUNC;
+pending:
    write_lock();
    key=(char *)tctreeget(rdtree, (void *)inobno, sizeof(INOBNO), &size);
    if ( NULL != key ) {
@@ -713,7 +723,8 @@ void add2cache (INOBNO *inobno, const char *buf, off_t offsetblock, size_t bsize
      ccachedta=(CCACHEDTA *)p;
      ccachedta->creationtime=time(NULL);
      while(ccachedta->pending == 1 ) {
-         LFATAL("Wait on pending");
+         release_write_lock();
+         goto pending;
      }
      ccachedta->dirty=1;
      ccachedta->pending=0;
@@ -744,6 +755,7 @@ void add2cache (INOBNO *inobno, const char *buf, off_t offsetblock, size_t bsize
    if ( bsize == BLKSIZE ) {
       LDEBUG("Write %llu-%llu to cachetree",inobno->inode,inobno->blocknr);
       tctreeput(cachetree, (void *)inobno, sizeof(INOBNO), (void *)&p, sizeof(unsigned long long));
+      ccachedta->dirty=0;
    }
 // When this is not a full block a separate thread is used.
    LDEBUG("Write %llu-%llu to rdtree",inobno->inode,inobno->blocknr);
@@ -976,6 +988,11 @@ void *queue_gard(void *arg)
          LDEBUG("queue_gard : force to drain the cache");
          get_global_lock();
          write_lock();
+         while (wait_pending()) {
+            release_write_lock();
+            usleep(100000);
+            write_lock();
+         }
          flush_queue(0, 1); 
          release_write_lock();
          release_global_lock();
@@ -1323,12 +1340,12 @@ void *init_worker(void *arg)
            if ( NULL != a ) {
               memcpy(&p,a,vsize);
               ccachedta=(CCACHEDTA *)p;
+              ccachedta->pending=1;
               dupkey=s_malloc(size);
               memcpy(dupkey,key,size);
               inobno[count]=(INOBNO *)dupkey;
               tctreeout(cachetree,key,size);
               found[count]++;
-              ccachedta->pending=1;
               release_write_lock();
               cook_cache(dupkey,size,ccachedta); 
               LDEBUG("Write %llu-%llu done get lock and delete cache",inobno[count]->inode,inobno[count]->blocknr);
@@ -1356,12 +1373,14 @@ void mark_dirty()
 #endif
 
     brand=as_sprintf("LESSFS_DIRTY");
+    hash_lock();
 #ifdef SHA3
     stiger=sha_binhash((unsigned char *)brand, strlen(brand));
 #else
     binhash((unsigned char *)brand, strlen(brand), res);
     stiger=(unsigned char *)&res;
 #endif
+    release_hash_lock();
     thetime = time(NULL);
     inuse=thetime;
     if ( config->blockdatabs != NULL ) {
@@ -1393,12 +1412,14 @@ int check_dirty()
 #endif
 
     brand=as_sprintf("LESSFS_DIRTY");
+    hash_lock();
 #ifdef SHA3
     stiger=sha_binhash((unsigned char *)brand, strlen(brand));
 #else
     binhash((unsigned char *)brand, strlen(brand), res);
     stiger=(unsigned char *)&res;
 #endif
+    release_hash_lock();
     if ( NULL == config->blockdatabs ) {
       finuse=file_get_inuse(stiger);
       if ( NULL != finuse ) {
@@ -1468,9 +1489,12 @@ static void *lessfs_init()
     ret = pthread_create(&flush_thread, NULL, lessfs_flush, (void *) NULL);
     if (ret != 0)
         die_syserr();
-    ret = pthread_create(&queue_gard_thread, NULL, queue_gard, (void *) NULL);
-    if (ret != 0)
-        die_syserr();
+
+// ALs het fout gaat...
+// Ja, dit is de oorzaak!
+    //ret = pthread_create(&queue_gard_thread, NULL, queue_gard, (void *) NULL);
+    //if (ret != 0)
+    //    die_syserr();
     ret =
         pthread_create(&housekeeping_thread, NULL, housekeeping_worker,
                        (void *)NULL);
@@ -1510,19 +1534,19 @@ static void *lessfs_init()
 #endif
 
        if ( config->blockdatabs != NULL ) {
-           inuse=getInUse(config->commithash);
+           inuse=getInUse((unsigned char *)config->commithash);
            if ( 0 == inuse ) { 
               LFATAL("COMMITSTAMP not found");
               lessfs_trans_stamp(); 
-              inuse=getInUse(config->commithash);
+              inuse=getInUse((unsigned char *)config->commithash);
            }
            ldate=inuse;
        } else {
-           finuse=file_get_inuse(config->commithash);
+           finuse=file_get_inuse((unsigned char *)config->commithash);
            if ( NULL == finuse ) {
                LFATAL("COMMITSTAMP not found, upgrading the filesystem to support transactions");
                lessfs_trans_stamp();
-               finuse=file_get_inuse(config->commithash);
+               finuse=file_get_inuse((unsigned char *)config->commithash);
            }
            ldate=finuse->inuse;
        }
@@ -1573,9 +1597,9 @@ static struct fuse_operations lessfs_oper = {
 
 void usage(char *appName)
 {
-    char **argv = (char **) malloc(2 * sizeof(char *));
+    char **argv = (char **) s_malloc(2 * sizeof(char *));
     argv[0] = appName;
-    argv[1] = (char *) malloc(3 * sizeof(char));
+    argv[1] = (char *) s_malloc(3 * sizeof(char));
     memcpy(argv[1], "-h\0", 3);
     fuse_main(2, argv, &lessfs_oper, NULL);
     FUNC;
@@ -1628,7 +1652,7 @@ int main(int argc, char *argv[])
 {
     int res;
     char *p, *maxwrite, *maxread;
-    char **argv_new = (char **) malloc(argc * sizeof(char *));
+    char **argv_new = (char **) s_malloc(argc * sizeof(char *));
     int argc_new = argc - 1;
     struct rlimit lessfslimit;
 
