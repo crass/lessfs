@@ -80,10 +80,8 @@ extern TCHDB *dbdta;
 extern TCBDB *dbdirent;
 extern TCBDB *freelist;
 extern TCMDB *dbcache;
-extern TCMDB *dbdtaq;
-extern TCMDB *blkcache;
-extern TCMDB *dbum;
-//extern TCMDB *dbbm;
+extern TCTREE *cachetree;
+extern TCTREE *rdtree;
 extern int fdbdta;
 
 extern unsigned long long nextoffset;
@@ -199,28 +197,36 @@ unsigned long long get_offset(unsigned long long size)
     return (offset);
 }
 
-/*
-void file_qdta(INOBNO * inobno, unsigned char *stiger, unsigned char *data,
-               unsigned long size, unsigned long long offset)
+void fl_write_cache(CCACHEDTA *ccachedta, INOBNO *inobno)
 {
-    QDTA *dta;
+   INUSE *inuse;
+   compr *compressed;
 
-    FUNC;
-    dta = (QDTA *) s_malloc(sizeof(QDTA));
-    memcpy(&dta->data, data, size);
-    dta->size = size;
-    dta->offset = offset;
-    LDEBUG("file_qdta store block on offset %llu with size %lu",
-           dta->offset, size);
-    get_moddb_lock();
-    loghash("qdta", stiger);
-    mbin_write_dbdata(dbdtaq, stiger, config->hashlen, dta, sizeof(QDTA));
-    release_moddb_lock();
-    free(dta);
-    EFUNC;
-    return;
-}*/
-
+   inuse = file_get_inuse((unsigned char *)&ccachedta->hash);
+   if (NULL == inuse) {
+      inuse = s_malloc(sizeof(INUSE));
+      compress_lock();
+#ifdef LZO
+      compressed =
+            lzo_compress(ccachedta->data, BLKSIZE);
+#else
+      compressed =
+            clz_compress(ccachedta->data, BLKSIZE);
+#endif
+      inuse->inuse = 0;
+      inuse->offset = get_offset(compressed->size);
+      inuse->size = compressed->size;
+      s_pwrite(fdbdta, compressed->data, compressed->size, inuse->offset);
+      comprfree(compressed);
+      release_compress_lock();
+   }
+   bin_write_dbdata(dbb,(char *)inobno,sizeof(INOBNO),ccachedta->hash,config->hashlen);
+   inuse->inuse++;
+   file_update_inuse((unsigned char *)&ccachedta->hash, inuse);
+   ccachedta->dirty=0;
+   ccachedta->pending=0;
+   return;
+}
 
 /* delete = 1 Do delete dbdata
    delete = 0 Do not delete dbdta */
@@ -251,14 +257,12 @@ unsigned int file_commit_block(unsigned char *dbdata,
     ret = compressed->size;
     inuse = file_get_inuse(stiger);
     if (NULL == inuse) {
-        loghash("commit_block : write hash with file_qdta", stiger);
         inuse = s_malloc(sizeof(INUSE));
         inuse->inuse = 0;
         inuse->offset = get_offset(compressed->size);
         inuse->size = compressed->size;
 //FIX FIX
-        //file_qdta(&inobno, stiger, compressed->data, compressed->size,
-        //          inuse->offset);
+        s_pwrite(fdbdta, compressed->data, compressed->size, inuse->offset);
     } else
         loghash("commit_block : only updated inuse for hash ", stiger);
     inuse->inuse++;
@@ -306,8 +310,75 @@ unsigned long long file_read_block(unsigned long long blocknr,
                                    const char *filename, char *blockdata,
                                    unsigned long long inode)
 {
-    unsigned long long ret = 0;
-    return (ret);
+     char *cachedata;
+     DBT *cdata;
+     DBT *data;
+     INOBNO inobno;
+     int ret=0;
+     CCACHEDTA *ccachedta;
+     DBT *tdata;
+     int vsize;
+     int size;
+     unsigned long long p;
+     inobno.inode=inode;
+     inobno.blocknr=blocknr;
+
+     write_lock();
+     cachedata=(char *)tctreeget(rdtree, (void *)&inobno, sizeof(INOBNO), &vsize);
+     if ( NULL == cachedata ) {
+        group_lock();
+        tdata=check_block_exists(&inobno);
+        if (NULL == tdata) { 
+            release_group_lock();
+            release_write_lock();
+            return (0);
+        }
+        cdata = file_tgr_read_data(tdata->data);
+        if (NULL == cdata ) {
+            log_fatal_hash("Could not find block",tdata->data);
+            die_dataerr("Could not find block");
+        }
+        DBTfree(tdata);
+        if (cdata->size < BLKSIZE ) {
+           compress_lock();
+#ifdef LZO
+           data = (DBT *)lzo_decompress(cdata->data, cdata->size);
+#else
+           data = (DBT *)clz_decompress(cdata->data, cdata->size);
+#endif
+           DBTfree(cdata);
+           memcpy(blockdata, data->data, data->size);
+           ret = data->size;
+           DBTfree(data);
+           release_compress_lock();
+        } else {
+           memcpy(blockdata, cdata->data, cdata->size);
+           ret = cdata->size;
+           DBTfree(cdata);
+        }
+        release_group_lock();
+// When we read a block < BLKSIZE there it is likely that we need
+// to read it again so it makes sense to put it in a cache.
+        if ( size != BLKSIZE ) {
+           ccachedta=s_zmalloc(sizeof(CCACHEDTA));
+           p=(unsigned long long)ccachedta;
+           ccachedta->dirty=0;
+           ccachedta->pending=0;
+           ccachedta->creationtime=time(NULL);
+           memcpy(&ccachedta->data, blockdata, ret);
+           tctreeput(rdtree, (void *)&inobno, sizeof(INOBNO), (void *)&p, sizeof(unsigned long long));
+        }
+        release_write_lock();
+        return(ret);
+// Fetch the block from disk and put it in the cache.
+     }
+     memcpy(&p,cachedata,vsize);
+     ccachedta=(CCACHEDTA *)p;
+     ccachedta->creationtime=time(NULL); 
+     memcpy(blockdata, &ccachedta->data, BLKSIZE);
+     ret = BLKSIZE;
+     release_write_lock();
+     return (ret);
 }
 
 /* The freelist is a btree with as key the number
@@ -333,13 +404,74 @@ void put_on_freelist(INUSE * inuse)
     return;
 }
 
-void file_update_block(const char *blockdata, unsigned long long blocknr,
-                       unsigned int offsetblock,
-                       unsigned long long size, unsigned long long inode,
-                       unsigned char *chksum)
+CCACHEDTA *file_update_stored(char *hash, INOBNO *inobno, off_t offsetblock)
 {
-    return;
+   DBT *encrypted;
+   DBT *data;
+   compr *uncompdata;
+   CCACHEDTA *ccachedta;
+   INUSE *inuse;
+
+   ccachedta=s_zmalloc(sizeof(CCACHEDTA));
+   ccachedta->creationtime=time(NULL);
+   ccachedta->dirty=1;
+   ccachedta->pending=0;
+
+   group_lock();
+#ifdef ENABLE_CRYPTO
+   encrypted = file_tgr_read_data(hash);
+   if (NULL == encrypted) {
+#else
+   data = file_tgr_read_data(hash);
+   if (NULL == data) {
+#endif
+
+#ifndef ENABLE_CRYPTO
+   }
+#else
+   } else {
+      if (config->encryptdata) {
+         data = decrypt(encrypted);
+         DBTfree(encrypted);
+      } else
+         data = encrypted;
+   }
+#endif
+   if (data->size < BLKSIZE) {
+      compress_lock();
+#ifdef LZO
+      uncompdata = lzo_decompress(data->data, data->size);
+#else
+      LDEBUG("uncomp data");
+      uncompdata = clz_decompress(data->data, data->size);
+      LDEBUG("done uncomp data");
+#endif
+      LDEBUG("got uncompsize : %lu", uncompdata->size);
+      memcpy(&ccachedta->data, uncompdata->data, uncompdata->size);
+      comprfree(uncompdata);
+      release_compress_lock();
+   } else {
+      LDEBUG("Got data->size %lu", data->size);
+      memcpy(&ccachedta->data, data->data, data->size);
+   }
+   DBTfree(data);
+   delete_dbb(inobno);
+   inuse = file_get_inuse(hash);
+   if (NULL == inuse)
+      die_dataerr("file_update_block : hash not found");
+   if (inuse->inuse <= 1) {
+      put_on_freelist(inuse);
+      delete_inuse(hash);
+   } else {
+      inuse->inuse--;
+      file_update_inuse(hash, inuse);
+   }
+   free(inuse);
+   release_group_lock();
+   EFUNC;
+   return ccachedta;
 }
+
 
 int file_fs_truncate(struct stat *stbuf, off_t size, char *bname)
 {
@@ -371,12 +503,7 @@ int file_fs_truncate(struct stat *stbuf, off_t size, char *bname)
              lastblocknr, blocknr);
         inobno.inode = stbuf->st_ino;
         inobno.blocknr = lastblocknr;
-        //get_dbb_lock();
-        //data = search_memhash(dbbm, &inobno, sizeof(INOBNO));
-        //if ( NULL == data ) {
-            data = search_dbdata(dbb, &inobno, sizeof(INOBNO));
-        //}
-        //release_dbb_lock();
+        data = search_dbdata(dbb, &inobno, sizeof(INOBNO));
         if (NULL == data) {
             LDEBUG
                 ("file_fs_truncate: deletion of non existent block inode : %llu, blocknr %llu",
@@ -395,6 +522,7 @@ int file_fs_truncate(struct stat *stbuf, off_t size, char *bname)
              lastblocknr);
         loghash("file_fs_truncate : tiger :", stiger);
         DBTfree(data);
+        group_lock();
         inuse = file_get_inuse(stiger);
         if (NULL == inuse)
             die_dataerr("file_fs_truncate : unexpected data error.");
@@ -412,6 +540,7 @@ int file_fs_truncate(struct stat *stbuf, off_t size, char *bname)
             file_update_inuse(stiger, inuse);
         }
         free(inuse);
+        release_group_lock();
         if (lastblocknr > 0)
             lastblocknr--;
         free(stiger);
@@ -427,6 +556,65 @@ void file_partial_truncate_block(struct stat *stbuf,
                                  unsigned int offset)
 {
     unsigned char *blockdata;
+    compr *uncompdata;
+    INOBNO inobno;
+    DBT *data;
+    unsigned char *stiger;
+    INUSE *inuse;
+    DBT cachedata;
+
+    FUNC;
+    LDEBUG("file_partial_truncate_block : inode %llu, blocknr %llu, offset %u",
+           stbuf->st_ino, blocknr, offset);
+    inobno.inode = stbuf->st_ino;
+    inobno.blocknr = blocknr;
+
+    group_lock();
+    data = search_dbdata(dbb, &inobno, sizeof(INOBNO));
+    if (NULL == data) {
+        release_group_lock();
+        LDEBUG("Deletion of non existent block?");
+        return;
+    }
+    stiger = s_malloc(data->size);
+    memcpy(stiger, data->data, data->size);
+    DBTfree(data);
+    release_group_lock();
+    blockdata = s_zmalloc(BLKSIZE);
+    data = file_tgr_read_data(stiger);
+    if ( NULL == data ) {
+        die_dataerr("Hmmm, did not expect this to happen.");
+    }
+    LDEBUG("file_partial_truncate_block : clz_decompress");
+    if (data->size != BLKSIZE) {
+#ifdef LZO
+        uncompdata = lzo_decompress(data->data, data->size);
+#else
+        uncompdata = clz_decompress(data->data, data->size);
+#endif
+        memcpy(blockdata, uncompdata->data, offset);
+        comprfree(uncompdata);
+    } else {
+        memcpy(blockdata, data->data, offset);
+    }
+    file_commit_block(blockdata,NULL,inobno,0);
+    DBTfree(data);
+    free(blockdata);
+    inuse = file_get_inuse(stiger);
+    if (NULL == inuse)
+        die_dataerr
+            ("file_partial_truncate_block : unexpected block not found");
+    if (inuse->inuse == 1) {
+        loghash("file_partial_truncate_block : delete hash", stiger);
+        put_on_freelist(inuse);
+        delete_inuse(stiger);
+    } else {
+        if (inuse->inuse > 1)
+            inuse->inuse--;
+        file_update_inuse(stiger, inuse);
+    }
+    free(inuse);
+    free(stiger);
     return;
 }
 
@@ -462,6 +650,13 @@ int file_unlink_file(const char *path)
         return (res);
     inode = st.st_ino;
     haslinks = st.st_nlink;
+    flush_abort(inode);
+    while (wait_pending()) {
+       flush_wait(st.st_ino);
+       release_write_lock();
+       usleep(100000);
+       write_lock();
+    }
     thetime = time(NULL);
     dname = s_dirname((char *) path);
     /* Change ctime and mtime of the parentdir Posix std posix behavior */
@@ -474,24 +669,21 @@ int file_unlink_file(const char *path)
         LDEBUG("unlink symlink done %s", path);
     }
     inobno.inode = inode;
-    inobno.blocknr = counter;
-    while (done < st.st_size) {
-        //get_dbb_lock();
-        //bdata = search_memhash(dbbm, &inobno, sizeof(INOBNO));
-        //if ( NULL == bdata ) {
-           bdata = search_dbdata(dbb, &inobno, sizeof(INOBNO));
-        //}
-        //release_dbb_lock();
+    inobno.blocknr = st.st_size/BLKSIZE;
+    if ( inobno.blocknr * BLKSIZE  < st.st_size ) inobno.blocknr++;
+
+// Start deleting the actual data blocks.
+    while (1) {
+        bdata = search_dbdata(dbb, &inobno, sizeof(INOBNO));
         if (bdata == NULL) {
-            LDEBUG("%llu is sparse", counter);
-            done = done + BLKSIZE;
-            counter++;
-            inobno.blocknr = counter;
+            if ( inobno.blocknr == 0 ) break;
+            inobno.blocknr--;
             continue;
         }
         stiger = s_malloc(bdata->size);
         memcpy(stiger, bdata->data, bdata->size);
         loghash("search inuse for ", stiger);
+        group_lock();
         inuse = file_get_inuse(stiger);
         if (NULL != inuse) {
            if (haslinks == 1) {
@@ -509,15 +701,15 @@ int file_unlink_file(const char *path)
            free(inuse);
         } else log_fatal_hash("unlink_file inuse not found",stiger);
         free(stiger);
+        release_group_lock();
         DBTfree(bdata);
         if (haslinks == 1) {
             LDEBUG("unlink_file : delete inode %llu - %llu", inobno.inode,
                    inobno.blocknr);
             delete_dbb(&inobno);
         }
-        counter++;
-        inobno.blocknr = counter;
-        done = done + BLKSIZE;
+        if ( inobno.blocknr == 0 ) break;
+        inobno.blocknr--;
     }
     if (haslinks == 1) {
         if (0 !=

@@ -125,7 +125,6 @@ unsigned char *sha_binhash(unsigned char *buf, int size)
 void binhash(unsigned char *buf, int size, word64 res[3])
 {
     tiger((unsigned char *) buf, size, res);
-    //log_fatal_hash("binhash returns :", (char *)res);
     return;
 }
 #endif
@@ -274,7 +273,6 @@ void check_datafile_sanity()
     if ( stbuf.st_size > nextoffset ) {
        LDEBUG("nextoffset = %llu, real size = %llu",nextoffset,stbuf.st_size);
        rsize=round_512(nextoffset);
-       LINFO("Rollback : truncate %s from %llu to %llu",config->blockdata,stbuf.st_size,rsize);
        if ( -1 == ftruncate(fdbdta, rsize)) die_dataerr("Failed to truncate %s to %llu bytes\n",config->blockdata,rsize);
     }
 }
@@ -2912,7 +2910,6 @@ void parseconfig(int mklessfs)
             config->freelist = read_val("FREELIST_PATH");
             config->freelistbs = read_val("FREELIST_BS");
             LINFO("The selected data store is file_io.");
-            die_dataerr("file_io is not yet supported in lessfs2");
         } else
             config->blockdatabs = read_val("BLOCKDATA_BS");
     }
@@ -3436,17 +3433,37 @@ void flush_queue(unsigned long long inode, bool force) {
     return;
 }
 
+void tc_write_cache(CCACHEDTA *ccachedta, INOBNO *inobno) 
+{
+   unsigned long long inuse;
+   compr *compressed;
+
+   inuse = getInUse((unsigned char *)&ccachedta->hash);
+   if (inuse == 0) {
+      compress_lock();
+#ifdef LZO
+      compressed =
+            lzo_compress(ccachedta->data, BLKSIZE);
+#else
+      compressed =
+            clz_compress(ccachedta->data, BLKSIZE);
+#endif
+      bin_write_dbdata(dbdta,&ccachedta->hash,config->hashlen,compressed->data,compressed->size);
+      comprfree(compressed);
+      release_compress_lock();
+   }
+   bin_write_dbdata(dbb,(char *)inobno,sizeof(INOBNO),ccachedta->hash,config->hashlen);
+   inuse++;
+   update_inuse((unsigned char *)&ccachedta->hash, inuse);
+   ccachedta->dirty=0;
+   ccachedta->pending=0;
+   return;
+}
+
 void cook_cache(char *key, int ksize, CCACHEDTA *ccachedta)
 {
-    char *hash;
-    compr *compressed;
-    INOBNO *inobno;
-    unsigned long long inuse;
-#ifndef SHA3
-    word64 *res;
-#endif
+   INOBNO *inobno;
 
-   LDEBUG("cook_cache");
    inobno=(INOBNO *)key;
    LDEBUG("cook_cache : %llu-%llu",inobno->inode,inobno->blocknr);
    hash_lock();
@@ -3459,32 +3476,12 @@ void cook_cache(char *key, int ksize, CCACHEDTA *ccachedta)
 #endif
    release_hash_lock();
    group_lock();
-   inuse = getInUse((unsigned char *)&ccachedta->hash);
-   if (inuse == 0) {
-      compress_lock();
-#ifdef LZO
-      compressed =
-            lzo_compress(ccachedta->data, BLKSIZE);
-#else
-      compressed =
-            clz_compress(ccachedta->data, BLKSIZE);
-#endif
-      loghash("cook_cache write hash",(unsigned char *)&ccachedta->hash);
-      bin_write_dbdata(dbdta,&ccachedta->hash,config->hashlen,compressed->data,compressed->size);
-      comprfree(compressed);
-      release_compress_lock();
+   if ( config->blockdatabs != NULL ){
+     tc_write_cache(ccachedta, inobno); 
+   } else {
+     fl_write_cache(ccachedta, inobno);
    }
-   loghash("cook_cache write hash to dbb",(unsigned char *)&ccachedta->hash);
-   LDEBUG("cook_cache  : dbb : %llu-%llu",inobno->inode,inobno->blocknr);
-   bin_write_dbdata(dbb,(char *)inobno,sizeof(INOBNO),ccachedta->hash,config->hashlen);
-   inuse++;
-   update_inuse((unsigned char *)&ccachedta->hash, inuse);
-   loghash("cook_cache write hash to dbu",(unsigned char *)&ccachedta->hash);
-   ccachedta->dirty=0;
-   ccachedta->pending=0;
    release_group_lock();
-   LDEBUG("cook_cache : %llu-%llu evicted from cache",inobno->inode,inobno->blocknr);
-   LDEBUG("/cook_cache");
    return;
 }
 

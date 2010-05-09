@@ -428,7 +428,6 @@ static int lessfs_truncate(const char *path, off_t size)
        write_lock();
     }
     if ( size < stbuf->st_size ) {
-    //if ( size < stbuf->st_size || size == 0 ) {
        if (NULL != config->blockdatabs) {
            res = db_fs_truncate(stbuf, size, bname);
        } else {
@@ -709,11 +708,10 @@ void add2cache (INOBNO *inobno, const char *buf, off_t offsetblock, size_t bsize
    int size;
    char *key;
    DBT *data=NULL;
-   DBT *rdata;
 
+   FUNC;
    update_filesize(inobno->inode, bsize, offsetblock,
                    inobno->blocknr, 0, BLKSIZE, 0);
-   FUNC;
 pending:
    write_lock();
    key=(char *)tctreeget(rdtree, (void *)inobno, sizeof(INOBNO), &size);
@@ -738,7 +736,11 @@ pending:
    if ( bsize < BLKSIZE ) {
       data=check_block_exists(inobno); 
       if ( NULL != data ) {
-         ccachedta=update_stored(data->data, inobno, offsetblock);
+         if (NULL == config->blockdatabs) {
+            ccachedta=file_update_stored(data->data, inobno, offsetblock);
+         } else {
+            ccachedta=update_stored(data->data, inobno, offsetblock);
+         }
          memcpy(&ccachedta->data[offsetblock],buf,bsize);
          DBTfree(data);
       }
@@ -769,16 +771,11 @@ static int lessfs_write(const char *path, const char *buf, size_t size,
                         off_t offset, struct fuse_file_info *fi)
 {
     off_t offsetblock;
-    DBT *blocktiger;
-    DBT *data;
     size_t bsize;
     size_t done = 0;
-    int res;
     INOBNO inobno;
-    int count=0;
 
     FUNC;
-
     get_global_lock();
     LDEBUG("lessfs_write offset %llu size %lu", offset, (unsigned long)size);
     inobno.inode = fi->fh;
@@ -822,7 +819,6 @@ static int lessfs_release(const char *path, struct fuse_file_info *fi)
     DBT *dataptr;
     MEMDDSTAT *memddstat;
     DBT *ddbuf;
-    DBT *data;
 
     FUNC;
 // Finish pending i/o for this inode.
@@ -1288,10 +1284,6 @@ void *lessfs_flush(void *arg)
 void *init_worker(void *arg)
 {
     int count;
-    int c;
-#ifndef SHA3
-    word64 res[max_threads][3];
-#endif
     char *a;
     unsigned long long p;
     CCACHEDTA *ccachedta;
@@ -1299,7 +1291,6 @@ void *init_worker(void *arg)
     char *key;
     int size;
     int vsize;
-    int lockres;
     int found[max_threads];
     char *dupkey;
 

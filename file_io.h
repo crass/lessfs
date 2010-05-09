@@ -36,9 +36,8 @@ void file_sync_flush_dtaq();
 void file_partial_truncate_block(struct stat *, unsigned long long,
                                  unsigned int);
 int file_unlink_file(const char *);
-void file_update_block(const char *, unsigned long long, unsigned int,
-                       unsigned long long, unsigned long long,
-                       unsigned char *);
+CCACHEDTA *file_update_stored(char *, INOBNO *, off_t);
+void fl_write_cache(CCACHEDTA *, INOBNO *);
 unsigned long long file_read_block(unsigned long long, const char *, char *, unsigned long long);
 int file_fs_truncate(struct stat *, off_t, char *);
 void file_update_inuse(unsigned char *, INUSE *);
