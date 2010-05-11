@@ -223,6 +223,7 @@ void fl_write_cache(CCACHEDTA *ccachedta, INOBNO *inobno)
    bin_write_dbdata(dbb,(char *)inobno,sizeof(INOBNO),ccachedta->hash,config->hashlen);
    inuse->inuse++;
    file_update_inuse((unsigned char *)&ccachedta->hash, inuse);
+   free(inuse);
    ccachedta->dirty=0;
    ccachedta->pending=0;
    return;

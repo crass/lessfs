@@ -714,6 +714,13 @@ void add2cache (INOBNO *inobno, const char *buf, off_t offsetblock, size_t bsize
                    inobno->blocknr, 0, BLKSIZE, 0);
 pending:
    write_lock();
+   LDEBUG("Current %lu",tctreernum(cachetree)*2);
+   LDEBUG("Max %llu",config->cachesize);
+   if ( tctreernum(cachetree)*2 > config->cachesize ||\
+        tctreernum(rdtree)*2 > config->cachesize ) {
+      flush_wait(inobno->inode);
+      flush_queue(0,0);
+   }
    key=(char *)tctreeget(rdtree, (void *)inobno, sizeof(INOBNO), &size);
    if ( NULL != key ) {
      LDEBUG("Found %llu-%llu in rdtree",inobno->inode,inobno->blocknr);
@@ -1300,6 +1307,8 @@ void *init_worker(void *arg)
     while (1) {
         if ( found[count] == 0 ) {
            sleep(1);
+           //LFATAL("cachetree %llu",tctreernum(cachetree));
+           //LFATAL("rdtree %llu",tctreernum(cachetree));
         } 
         found[count]=0;
         write_lock();
@@ -1318,7 +1327,7 @@ void *init_worker(void *arg)
               release_write_lock();
               cook_cache(dupkey,size,ccachedta); 
               LDEBUG("Write %llu-%llu done get lock and delete cache",inobno[count]->inode,inobno[count]->blocknr);
-              free(dupkey);
+              free(inobno[count]);
            } 
         }
         if ( 0 == found[count]) release_write_lock(); 

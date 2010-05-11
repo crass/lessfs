@@ -3365,7 +3365,7 @@ void flush_wait(unsigned long long inode)
           ccachedta=(CCACHEDTA *)p;
           inobno=(INOBNO *)key;
           if ( inode == inobno->inode ) {
-             if ( ccachedta->pending == 1 ) {
+             if ( ccachedta->dirty == 1 ) {
                 while(ccachedta->pending == 1 ) {
                    usleep(10);
                 }
@@ -3399,13 +3399,16 @@ void flush_queue(unsigned long long inode, bool force) {
           inobno=(INOBNO *)key;
           if ( ccachedta->dirty == 1 ) {
              if ( ccachedta->pending != 1 ) {
+// Only queue to be processed when it's not in the queue.
+                if ( NULL == tctreeget(cachetree, (void *)key, size, &vsize)) {
+                   if ( inode == 0 ) {
 // The processing threads will now pickup the block
-                if ( inode == 0 ) {
-                   tctreeput(cachetree, (void *)inobno, sizeof(INOBNO), (void *)&p, sizeof(unsigned long long));
-                } else {
-                   if ( inode == inobno->inode ) {
-                      LDEBUG("Flush specified inode %llu ->  %llu-%llu from the cache",inode,inobno->inode,inobno->blocknr);
                       tctreeput(cachetree, (void *)inobno, sizeof(INOBNO), (void *)&p, sizeof(unsigned long long));
+                   } else {
+                      if ( inode == inobno->inode ) {
+                         LDEBUG("Flush specified inode %llu ->  %llu-%llu from the cache",inode,inobno->inode,inobno->blocknr);
+                         tctreeput(cachetree, (void *)inobno, sizeof(INOBNO), (void *)&p, sizeof(unsigned long long));
+                      }
                    }
                 }
              }
@@ -3463,6 +3466,9 @@ void tc_write_cache(CCACHEDTA *ccachedta, INOBNO *inobno)
 void cook_cache(char *key, int ksize, CCACHEDTA *ccachedta)
 {
    INOBNO *inobno;
+#ifdef SHA3
+   char *hash;
+#endif 
 
    inobno=(INOBNO *)key;
    LDEBUG("cook_cache : %llu-%llu",inobno->inode,inobno->blocknr);
