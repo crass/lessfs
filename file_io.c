@@ -347,7 +347,6 @@ unsigned long long file_read_block(unsigned long long blocknr,
 #else
            data = (DBT *)clz_decompress(cdata->data, cdata->size);
 #endif
-           DBTfree(cdata);
            memcpy(blockdata, data->data, data->size);
            ret = data->size;
            DBTfree(data);
@@ -355,12 +354,18 @@ unsigned long long file_read_block(unsigned long long blocknr,
         } else {
            memcpy(blockdata, cdata->data, cdata->size);
            ret = cdata->size;
-           DBTfree(cdata);
         }
+        DBTfree(cdata);
         release_group_lock();
 // When we read a block < BLKSIZE there it is likely that we need
 // to read it again so it makes sense to put it in a cache.
         if ( size != BLKSIZE ) {
+// Make sure that we don't overflow the cache.
+           if ( tctreernum(cachetree)*2 > config->cachesize ||\
+                tctreernum(rdtree)*2 > config->cachesize ) {
+              flush_wait(inobno.inode);
+              flush_queue(0,0);
+           }
            ccachedta=s_zmalloc(sizeof(CCACHEDTA));
            p=(unsigned long long)ccachedta;
            ccachedta->dirty=0;
