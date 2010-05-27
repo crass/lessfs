@@ -16,9 +16,9 @@ extern TCHDB *dbs;
 extern TCBDB *dbdirent;
 extern TCBDB *freelist;
 extern TCBDB *dbl;
-extern TCMDB *dbcache;
 extern TCTREE *cachetree;
 extern TCTREE *rdtree;
+extern TCTREE *metatree;
 extern int fdbdta;
 
 extern unsigned long long nextoffset;

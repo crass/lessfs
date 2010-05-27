@@ -113,9 +113,6 @@ int main(int argc, char *argv[])
     char *ckpasswd;
     char *p;
 #endif
-#ifndef SHA3
-    word64 res[3];
-#endif
 
     if (argc < 2)
         usage(argv[0]);
@@ -178,13 +175,7 @@ int main(int argc, char *argv[])
         }
     }
 #endif
-#ifdef SHA3
-    config->commithash=sha_binhash((unsigned char *)"COMMITSTAMP", strlen("COMMITSTAMP"));
-#else
-    binhash((unsigned char *)"COMMITSTAMP", strlen("COMMITSTAMP"), res);
-    config->commithash=s_malloc(config->hashlen);
-    memcpy(config->commithash,(unsigned char *)&res,config->hashlen);
-#endif
+    config->commithash=thash((unsigned char *)"COMMITSTAMP", strlen("COMMITSTAMP"),1);
     formatfs();
     sync();
 #ifdef ENABLE_CRYPTO

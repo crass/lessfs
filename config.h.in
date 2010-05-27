@@ -74,6 +74,12 @@
 /* Define to 1 if you have the `memset' function. */
 #undef HAVE_MEMSET
 
+/* Define to 1 if you have the <mhash.h> header file. */
+#undef HAVE_MHASH_H
+
+/* Define to 1 if you have the `mhash_init' function. */
+#undef HAVE_MHASH_INIT
+
 /* Define to 1 if you have the `mkdir' function. */
 #undef HAVE_MKDIR
 
@@ -149,13 +155,13 @@
 /* Define to 1 if you have the `strstr' function. */
 #undef HAVE_STRSTR
 
-/* Define to 1 if `struct stat' is a member of `st_blksize'. */
+/* Define to 1 if `st_blksize' is a member of `struct stat'. */
 #undef HAVE_STRUCT_STAT_ST_BLKSIZE
 
-/* Define to 1 if `struct stat' is a member of `st_blocks'. */
+/* Define to 1 if `st_blocks' is a member of `struct stat'. */
 #undef HAVE_STRUCT_STAT_ST_BLOCKS
 
-/* Define to 1 if `struct stat' is a member of `st_rdev'. */
+/* Define to 1 if `st_rdev' is a member of `struct stat'. */
 #undef HAVE_STRUCT_STAT_ST_RDEV
 
 /* Define to 1 if your `struct stat' has `st_blocks'. Deprecated, use
@@ -245,9 +251,6 @@
 
 /* Define to the type of arg 5 for `select'. */
 #undef SELECT_TYPE_ARG5
-
-/* Define if you want Blue Midnight Wish hashes */
-#undef SHA3
 
 /* If using the C implementation of alloca, define if you know the
    direction of stack growth for your system; otherwise it will be

@@ -25,8 +25,9 @@
 #define MAX_FUSE_BLKSIZE 131072
 #define BMWLEN 224
 #define METAQSIZE 2048
-#define MAX_HASH_LEN 32
+#define MAX_HASH_LEN 64
 #define CACHE_MAX_AGE 30
+#define MAX_ALLOWED_THREADS 1024
 
 typedef unsigned long long int word64;
 typedef unsigned long word32;
@@ -51,6 +52,7 @@ typedef struct {
 
 typedef struct {
     struct stat stbuf;
+    unsigned long long real_size;
     char filename[MAX_POSIX_FILENAME_LEN];
 } DDSTAT;
 
@@ -64,8 +66,7 @@ typedef struct {
     unsigned int updated;
     unsigned long long blocknr;
     unsigned int opened;
-    unsigned long long deduplicated;
-    unsigned long long lzo_compressed_size;
+    unsigned long long real_size;
     char filename[MAX_POSIX_FILENAME_LEN];
 } MEMDDSTAT;
 
@@ -75,6 +76,8 @@ typedef struct {
     int dirty;
     time_t creationtime;
     int pending; 
+    char newblock;
+    unsigned long updated;
 } CCACHEDTA;
 
 DBT *check_block_exists(INOBNO *);
@@ -88,6 +91,7 @@ void mbin_write_dbdata(TCMDB *, void *, int, void *, int);
 void dbmknod(const char *, mode_t, char *, dev_t);
 void get_global_lock();
 void release_global_lock();
+void release_group_lock();
 void DBTfree(DBT *);
 void delete_key(TCHDB *, void *, int);
 unsigned long long getInUse(unsigned char *);
@@ -120,7 +124,7 @@ char *fs_search_topdir(char *);
 void btbin_write_dbdata(TCBDB *, void *, int, void *, int);
 void btbin_curwrite_dbdata(TCBDB *, BDBCUR *, char *, int);
 void ddstatfree(DDSTAT *);
-DBT *create_ddbuf(struct stat, char *);
+DBT *create_ddbuf(struct stat, char *, unsigned long long);
 DDSTAT *value_to_ddstat(DBT *);
 unsigned long long has_nodes(unsigned long long);
 void fil_fuse_info(DDSTAT *, void *, fuse_fill_dir_t,
@@ -140,6 +144,7 @@ void memddstatfree(MEMDDSTAT *);
 int update_parent_time(char *, int);
 void tc_defrag();
 void binhash(unsigned char *, int, word64[3]);
+unsigned char *thash(unsigned char *, int, int );
 unsigned char *sha_binhash(unsigned char *, int);
 void release_write_lock();
 void release_hash_lock();
@@ -175,6 +180,7 @@ DBT *search_nhash(TCNDB *, void *, int );
 void flush_queue(unsigned long long , bool);
 void flush_abort(unsigned long long);
 void flush_wait(unsigned long long);
-void cook_cache(char *, int, CCACHEDTA *);
+void cook_cache(char *, int, CCACHEDTA *, int);
 void start_flush_commit();
 void end_flush_commit();
+int wait_pending();

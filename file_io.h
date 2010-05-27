@@ -36,9 +36,10 @@ void file_sync_flush_dtaq();
 void file_partial_truncate_block(struct stat *, unsigned long long,
                                  unsigned int);
 int file_unlink_file(const char *);
-CCACHEDTA *file_update_stored(char *, INOBNO *, off_t);
+CCACHEDTA *file_update_stored(unsigned char *, INOBNO *, off_t);
 void fl_write_cache(CCACHEDTA *, INOBNO *);
 unsigned long long file_read_block(unsigned long long, const char *, char *, unsigned long long);
 int file_fs_truncate(struct stat *, off_t, char *);
 void file_update_inuse(unsigned char *, INUSE *);
 DBT *file_tgr_read_data(unsigned char *);
+unsigned long long round_512(unsigned long long );

@@ -60,9 +60,6 @@
 #include "lib_tc.h"
 #include "lib_crypto.h"
 #include "file_io.h"
-#ifdef SHA3
-#include "lib_BMW_SHA3api_ref.h"
-#endif
 
 extern char *logname;
 extern char *function;
@@ -79,9 +76,9 @@ extern TCHDB *dbs;
 extern TCHDB *dbdta;
 extern TCBDB *dbdirent;
 extern TCBDB *freelist;
-extern TCMDB *dbcache;
 extern TCTREE *cachetree;
 extern TCTREE *rdtree;
+extern TCTREE *cachetree;
 extern int fdbdta;
 
 extern unsigned long long nextoffset;
@@ -217,6 +214,14 @@ void fl_write_cache(CCACHEDTA *ccachedta, INOBNO *inobno)
       inuse->offset = get_offset(compressed->size);
       inuse->size = compressed->size;
       s_pwrite(fdbdta, compressed->data, compressed->size, inuse->offset);
+      if ( ccachedta->newblock == 1 ) update_meta(inobno->inode,compressed->size,1);
+      if ( ccachedta->updated != 0 ) {
+         if ( compressed->size > ccachedta->updated ) { 
+            update_meta(inobno->inode,compressed->size-ccachedta->updated,1);
+         } else {
+            update_meta(inobno->inode,ccachedta->updated-compressed->size,0);
+         }
+      }
       comprfree(compressed);
       release_compress_lock();
    }
@@ -226,6 +231,7 @@ void fl_write_cache(CCACHEDTA *ccachedta, INOBNO *inobno)
    free(inuse);
    ccachedta->dirty=0;
    ccachedta->pending=0;
+   ccachedta->newblock=0;
    return;
 }
 
@@ -239,17 +245,9 @@ unsigned int file_commit_block(unsigned char *dbdata,
     compr *compressed;
     INUSE *inuse;
     unsigned int ret = 0;
-#ifndef SHA3
-    word64 res[3];
-#endif
 
     FUNC;
-#ifdef SHA3
-    stiger=sha_binhash(dbdata, BLKSIZE);
-#else
-    binhash(dbdata, BLKSIZE, res);
-    stiger=(unsigned char *)&res;
-#endif
+    stiger=thash(dbdata, BLKSIZE, MAX_ALLOWED_THREADS);
 #ifdef LZO
     compressed = lzo_compress((unsigned char *) dbdata, BLKSIZE);
 #else
@@ -262,7 +260,6 @@ unsigned int file_commit_block(unsigned char *dbdata,
         inuse->inuse = 0;
         inuse->offset = get_offset(compressed->size);
         inuse->size = compressed->size;
-//FIX FIX
         s_pwrite(fdbdta, compressed->data, compressed->size, inuse->offset);
     } else
         loghash("commit_block : only updated inuse for hash ", stiger);
@@ -270,9 +267,7 @@ unsigned int file_commit_block(unsigned char *dbdata,
     file_update_inuse(stiger, inuse);
     comprfree(compressed);
     bin_write_dbdata(dbb,(char *)&inobno,sizeof(INOBNO),stiger,config->hashlen);
-#ifdef SHA3
     free(stiger);
-#endif
     free(inuse);
     return (ret);
 }
@@ -319,7 +314,7 @@ unsigned long long file_read_block(unsigned long long blocknr,
      CCACHEDTA *ccachedta;
      DBT *tdata;
      int vsize;
-     int size;
+     int size=0;
      unsigned long long p;
      inobno.inode=inode;
      inobno.blocknr=blocknr;
@@ -410,7 +405,7 @@ void put_on_freelist(INUSE * inuse)
     return;
 }
 
-CCACHEDTA *file_update_stored(char *hash, INOBNO *inobno, off_t offsetblock)
+CCACHEDTA *file_update_stored(unsigned char *hash, INOBNO *inobno, off_t offsetblock)
 {
    DBT *encrypted;
    DBT *data;
@@ -422,6 +417,7 @@ CCACHEDTA *file_update_stored(char *hash, INOBNO *inobno, off_t offsetblock)
    ccachedta->creationtime=time(NULL);
    ccachedta->dirty=1;
    ccachedta->pending=0;
+   ccachedta->newblock=0;
 
    group_lock();
 #ifdef ENABLE_CRYPTO
@@ -454,6 +450,7 @@ CCACHEDTA *file_update_stored(char *hash, INOBNO *inobno, off_t offsetblock)
 #endif
       LDEBUG("got uncompsize : %lu", uncompdata->size);
       memcpy(&ccachedta->data, uncompdata->data, uncompdata->size);
+      ccachedta->updated=data->size;
       comprfree(uncompdata);
       release_compress_lock();
    } else {
@@ -784,7 +781,7 @@ int file_unlink_file(const char *path)
                 die_dataerr("unlink_file : Failed to delete record.");
             }
         }
-        ddbuf = create_ddbuf(ddstat->stbuf, ddstat->filename);
+        ddbuf = create_ddbuf(ddstat->stbuf, ddstat->filename, ddstat->real_size);
         bin_write_dbdata(dbp, &inode,
                          sizeof(unsigned long long), (void *) ddbuf->data,
                          ddbuf->size);

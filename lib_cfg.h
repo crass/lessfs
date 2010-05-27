@@ -38,6 +38,7 @@ struct configdata {
     char *freelistbs;
     char *nexthash;
     char *commithash;
+    char *hash;
     unsigned char *iv;
     unsigned char *passwd;
     unsigned long long cachesize;
@@ -47,6 +48,7 @@ struct configdata {
     unsigned int relax;
     unsigned int encryptdata;
     unsigned int encryptmeta;
+    unsigned int selected_hash;
     int hashlen;
     int transactions;
 };

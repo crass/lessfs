@@ -240,7 +240,7 @@ void check_inode_structure(DDSTAT *ddstat)
    if ( found  && real_size>ddstat->stbuf.st_size+BLKSIZE ) {
      printf("inode %llu size %llu mismatch, restore size to %llu bytes\n",ddstat->stbuf.st_ino,ddstat->stbuf.st_size,real_size);
      ddstat->stbuf.st_size=real_size;
-     ddbuf = create_ddbuf(ddstat->stbuf, ddstat->filename); 
+     ddbuf = create_ddbuf(ddstat->stbuf, ddstat->filename, ddstat->real_size); 
      bin_write_dbdata(dbp, &inobno.inode,
                       sizeof(unsigned long long), (void *) ddbuf->data,
                       ddbuf->size);
@@ -284,7 +284,7 @@ void file_check_inode_structure(DDSTAT *ddstat)
    if ( found  && real_size>ddstat->stbuf.st_size+BLKSIZE ) {
      printf("inode %llu size %llu mismatch, restore size to %llu bytes\n",ddstat->stbuf.st_ino,ddstat->stbuf.st_size,real_size);
      ddstat->stbuf.st_size=real_size;
-     ddbuf = create_ddbuf(ddstat->stbuf, ddstat->filename);
+     ddbuf = create_ddbuf(ddstat->stbuf, ddstat->filename, real_size);
      bin_write_dbdata(dbp, &inobno.inode,
                       sizeof(unsigned long long), (void *) ddbuf->data,
                       ddbuf->size);

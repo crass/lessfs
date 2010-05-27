@@ -56,8 +56,7 @@
 #include <sys/resource.h>
 #include <sys/types.h>
 #include <sys/wait.h>
-
-
+#include <mhash.h>
 #include <tcutil.h>
 #include <tchdb.h>
 #include <tcbdb.h>
@@ -81,9 +80,6 @@
 #include "retcodes.h"
 #ifdef ENABLE_CRYPTO
 #include "lib_crypto.h"
-#endif
-#ifdef SHA3
-#include "lib_BMW_SHA3api_ref.h"
 #endif
 
 #ifdef i386
@@ -113,6 +109,61 @@ void libSafeExit()
     LFATAL("Exit signal received from lib_safe, exitting\n");
     exit(EXIT_OK);
 }
+
+char *lessfs_stats()
+{
+    char *msg;
+    char *msg2;
+    char *line;
+    unsigned long long nextinode;
+    unsigned long long count=5;
+    char *key, *value;
+    int vsize;
+    int ksize;
+    DDSTAT *ddstat;
+    DBT *data;
+    unsigned long long inode;
+    char *nfi = "NFI";
+    CRYPTO *crypto;
+
+
+    msg=as_sprintf("INODE	   SIZE 	   COMPRESSED_SIZE	 FILENAME\n");
+    /* traverse records */
+    tchdbiterinit(dbp);
+    while ((key = tchdbiternext(dbp, &ksize)) != NULL) {
+        if (0 != memcmp(key, nfi, 3)) {
+            memcpy(&inode, key, sizeof(unsigned long long));
+            data = search_dbdata(dbp, &inode, sizeof(unsigned long long));
+            if (inode == 0) {
+                crypto = (CRYPTO *) data->data;
+            } else {
+                ddstat = value_to_ddstat(data);
+                if (S_ISREG(ddstat->stbuf.st_mode)) {
+#ifdef x86_64
+                   line=as_sprintf
+                       ("%lu		%lu		%llu		%s\n",
+                        ddstat->stbuf.st_ino, ddstat->stbuf.st_size,
+                        ddstat->real_size, ddstat->filename);
+#else
+                   line=as_sprintf
+                       ("%llu		%llu		%llu		%s\n",
+                        ddstat->stbuf.st_ino, ddstat->stbuf.st_size,
+                        ddstat->real_size, ddstat->filename);
+#endif
+                   msg2=msg;
+                   msg=as_strcat(msg2,line);
+                   free(msg2);
+                   free(line);
+                }
+                ddstatfree(ddstat);
+            }
+            DBTfree(data);
+        }
+        free(key);
+    }
+    return msg;
+}
+
 
 int check_path_sanity(const char *path)
 {
@@ -163,6 +214,8 @@ void dbsync()
 static int lessfs_getattr(const char *path, struct stat *stbuf)
 {
     int res;
+    char *msg;
+
     FUNC;
     LDEBUG("lessfs_getattr %s", path);
     res = check_path_sanity(path);
@@ -174,6 +227,11 @@ static int lessfs_getattr(const char *path, struct stat *stbuf)
     LDEBUG("lessfs_getattr : st_nlinks=%u", stbuf->st_nlink);
     LDEBUG("lessfs_getattr : %s size %llu : result %i",path,
            (unsigned long long) stbuf->st_size, res);
+    if ( 0 == strcmp("/.lessfs_stats",path)){
+       msg=lessfs_stats();
+       stbuf->st_size=strlen(msg);
+       free(msg);
+    }
     release_global_lock();
     return (res);
 }
@@ -251,6 +309,8 @@ static int lessfs_unlink(const char *path)
 {
     int res;
     FUNC;
+// /.lessfs_stats can not be deleted
+    if ( 0 == strcmp(path,"/.lessfs_stats")) return(0);
     get_global_lock();
     write_lock();
     if (NULL != config->blockdatabs) {
@@ -323,7 +383,8 @@ static int lessfs_chmod(const char *path, mode_t mode)
     int res;
     time_t thetime;
     struct stat stbuf;
-    DBT *data;
+    const char *data;
+    int vsize;
     MEMDDSTAT *memddstat;
     DBT *ddbuf;
 
@@ -333,20 +394,19 @@ static int lessfs_chmod(const char *path, mode_t mode)
     thetime = time(NULL);
     res = dbstat(path, &stbuf);
     if ( res != 0 ) return(res);
-    data = search_memhash(dbcache, &stbuf.st_ino,
-                          sizeof(unsigned long long));
+    data = tctreeget(metatree, &stbuf.st_ino,
+                          sizeof(unsigned long long), &vsize);
     if (NULL != data) {
-        memddstat = (MEMDDSTAT *) data->data;
+        memddstat = (MEMDDSTAT *) data;
         memddstat->stbuf.st_ctim.tv_sec = thetime;
         memddstat->stbuf.st_ctim.tv_nsec=0;
         memddstat->stbuf.st_mode = mode;
         memddstat->updated = 1;
         ddbuf = create_mem_ddbuf(memddstat);
-        mbin_write_dbdata(dbcache, &stbuf.st_ino,
+        tctreeput(metatree, &stbuf.st_ino,
                           sizeof(unsigned long long), (void *) ddbuf->data,
                           ddbuf->size);
         DBTfree(ddbuf);
-        DBTfree(data);
     } else {
         stbuf.st_mode = mode;
         stbuf.st_ctim.tv_sec = thetime;
@@ -362,7 +422,8 @@ static int lessfs_chown(const char *path, uid_t uid, gid_t gid)
     int res;
     time_t thetime;
     struct stat stbuf;
-    DBT *data;
+    const char *data;
+    int vsize;
     MEMDDSTAT *memddstat;
     DBT *ddbuf;
 
@@ -371,21 +432,20 @@ static int lessfs_chown(const char *path, uid_t uid, gid_t gid)
     thetime = time(NULL);
     res = dbstat(path, &stbuf);
     if ( res != 0 ) return(res);
-    data = search_memhash(dbcache, &stbuf.st_ino,
-                          sizeof(unsigned long long));
+    data = tctreeget(metatree, &stbuf.st_ino,
+                          sizeof(unsigned long long), &vsize);
     if (NULL != data) {
-        memddstat = (MEMDDSTAT *) data->data;
+        memddstat = (MEMDDSTAT *) data;
         memddstat->stbuf.st_ctim.tv_sec = thetime;
         memddstat->stbuf.st_ctim.tv_nsec=0;
         memddstat->stbuf.st_uid = uid;
         memddstat->stbuf.st_gid = gid;
         memddstat->updated = 1;
         ddbuf = create_mem_ddbuf(memddstat);
-        mbin_write_dbdata(dbcache, &stbuf.st_ino,
+        tctreeput(metatree, &stbuf.st_ino,
                           sizeof(unsigned long long), (void *) ddbuf->data,
                           ddbuf->size);
         DBTfree(ddbuf);
-        DBTfree(data);
     } else {
         if (-1 != uid)
            stbuf.st_uid = uid;
@@ -450,7 +510,9 @@ static int lessfs_utimens(const char *path, const struct timespec ts[2])
     struct stat stbuf;
     DDSTAT *ddstat;
     DBT *ddbuf;
-    DBT *data;
+    DBT *dskdata;
+    const char *data;
+    int vsize;
     MEMDDSTAT *memddstat;
 
     FUNC;
@@ -460,40 +522,39 @@ static int lessfs_utimens(const char *path, const struct timespec ts[2])
        release_global_lock();
        return(res);
     }
-    data = search_memhash(dbcache, &stbuf.st_ino,
-                          sizeof(unsigned long long));
+    data = tctreeget(metatree, &stbuf.st_ino,
+                          sizeof(unsigned long long), &vsize);
     if (NULL != data) {
-        memddstat = (MEMDDSTAT *) data->data;
+        memddstat = (MEMDDSTAT *) data;
         memddstat->stbuf.st_atim.tv_sec = ts[0].tv_sec;
         memddstat->stbuf.st_atim.tv_nsec = ts[0].tv_nsec;
         memddstat->stbuf.st_mtim.tv_sec = ts[1].tv_sec;
         memddstat->stbuf.st_mtim.tv_nsec = ts[1].tv_nsec;
         memddstat->updated = 1;
         ddbuf = create_mem_ddbuf(memddstat);
-        mbin_write_dbdata(dbcache, &stbuf.st_ino,
+        tctreeput(metatree, &stbuf.st_ino,
                           sizeof(unsigned long long), (void *) ddbuf->data,
                           ddbuf->size);
         DBTfree(ddbuf);
-        DBTfree(data);
     } else {
-        data =
+        dskdata =
             search_dbdata(dbp, &stbuf.st_ino, sizeof(unsigned long long));
-        if (data == NULL) {
+        if (dskdata == NULL) {
 #ifdef x86_64
             die_dataerr("Failed to find file %lu", stbuf.st_ino);
 #else
             die_dataerr("Failed to find file %llu", stbuf.st_ino);
 #endif
         }
-        ddstat = value_to_ddstat(data);
+        ddstat = value_to_ddstat(dskdata);
         ddstat->stbuf.st_atim.tv_sec = ts[0].tv_sec;
         ddstat->stbuf.st_atim.tv_nsec = ts[0].tv_nsec;
         ddstat->stbuf.st_mtim.tv_sec = ts[1].tv_sec;
         ddstat->stbuf.st_mtim.tv_nsec = ts[1].tv_nsec;
-        ddbuf = create_ddbuf(ddstat->stbuf, ddstat->filename);
+        ddbuf = create_ddbuf(ddstat->stbuf, ddstat->filename, ddstat->real_size);
         bin_write_dbdata(dbp, &stbuf.st_ino, sizeof(unsigned long long),
                          (void *) ddbuf->data, ddbuf->size);
-        DBTfree(data);
+        DBTfree(dskdata);
         DBTfree(ddbuf);
         ddstatfree(ddstat);
     }
@@ -501,15 +562,33 @@ static int lessfs_utimens(const char *path, const struct timespec ts[2])
     return (res);
 }
 
+unsigned long long get_real_size(unsigned long long inode)
+{
+   DBT *data;
+   DDSTAT *ddstat;
+   unsigned long long real_size=0;
+  
+   data = search_dbdata(dbp, &inode, sizeof(unsigned long long));
+   if (NULL == data) {
+       return(real_size);
+   }
+   ddstat = value_to_ddstat(data);
+   DBTfree(data);
+   real_size=ddstat->real_size;
+   ddstatfree(ddstat); 
+   return(real_size); 
+}
+
 static int lessfs_open(const char *path, struct fuse_file_info *fi)
 {
     struct stat stbuf;
     char *bname;
     DBT *ddbuf;
-    DBT *dataptr;
+    const char *dataptr;
     unsigned long long blocknr = 0;
     MEMDDSTAT *memddstat;
     unsigned long long inode;
+    int vsize;
 
     int res = 0;
 
@@ -533,8 +612,8 @@ static int lessfs_open(const char *path, struct fuse_file_info *fi)
         bname = s_basename((char *) path);
 //  Check if we have already something in cache for this inode
         dataptr =
-            search_memhash(dbcache, &stbuf.st_ino,
-                           sizeof(unsigned long long));
+            tctreeget(metatree, &stbuf.st_ino,
+                           sizeof(unsigned long long), &vsize);
         if (dataptr == NULL) {
             blocknr--;          /* Invalid block in cache */
 //  Initialize the cache
@@ -543,36 +622,45 @@ static int lessfs_open(const char *path, struct fuse_file_info *fi)
             memcpy(&memddstat->filename, bname, strlen(bname) + 1);
             memddstat->blocknr = blocknr;
             memddstat->updated = 0;
+            memddstat->real_size = get_real_size(stbuf.st_ino);
             memddstat->opened = 1;
-            memddstat->deduplicated = 0;
-            memddstat->lzo_compressed_size = 0;
             memddstat->stbuf.st_atim.tv_sec=time(NULL);
             memddstat->stbuf.st_atim.tv_nsec=0;
             LDEBUG("lessfs_open : initial open memddstat->opened = %u",
                    memddstat->opened);
             ddbuf = create_mem_ddbuf(memddstat);
-            mbin_write_dbdata(dbcache, &inode, sizeof(unsigned long long),
+            tctreeput(metatree, &inode, sizeof(unsigned long long),
                               (void *) ddbuf->data, ddbuf->size);
             DBTfree(ddbuf);
             memddstatfree(memddstat);
         } else {
-            memddstat = (MEMDDSTAT *) dataptr->data;
+            memddstat = (MEMDDSTAT *) dataptr;
             memddstat->opened++;
             memddstat->stbuf.st_atim.tv_sec=time(NULL);
             memddstat->stbuf.st_atim.tv_nsec=0;
             LDEBUG("lessfs_open : repeated open ddstat->opened = %u",
                    memddstat->opened);
             ddbuf = create_mem_ddbuf(memddstat);
-            mbin_write_dbdata(dbcache, &inode, sizeof(unsigned long long),
+            tctreeput(metatree, &inode, sizeof(unsigned long long),
                               (void *) ddbuf->data, ddbuf->size);
             DBTfree(ddbuf);
-            DBTfree(dataptr);
         }
         free(bname);
     }
     release_global_lock();
     EFUNC;
     return (res);
+}
+
+void write_lessfs_stats(char *buf, size_t size, off_t offset)
+{
+    char *msg;
+
+    memset(buf,0,size);
+    msg=lessfs_stats();
+    memcpy(buf,msg,strlen(msg)+1);
+    free(msg);
+    return;
 }
 
 static int lessfs_read(const char *path, char *buf, size_t size,
@@ -587,6 +675,10 @@ static int lessfs_read(const char *path, char *buf, size_t size,
 
     FUNC;
 
+    if ( fi->fh == 4 ) {
+       write_lessfs_stats(buf,size,offset);
+       return(strlen(buf)+1);
+    }
     get_global_lock();
 // Change this to creating a buffer that is allocated once.
     tmpbuf = s_zmalloc(BLKSIZE + 1);
@@ -631,7 +723,7 @@ static int lessfs_read(const char *path, char *buf, size_t size,
     return (done);
 }
 
-CCACHEDTA *update_stored(char *hash, INOBNO *inobno, off_t offsetblock)
+CCACHEDTA *update_stored(unsigned char *hash, INOBNO *inobno, off_t offsetblock)
 {
    DBT *encrypted;
    DBT *data;
@@ -644,6 +736,7 @@ CCACHEDTA *update_stored(char *hash, INOBNO *inobno, off_t offsetblock)
    ccachedta->creationtime=time(NULL);
    ccachedta->dirty=1;
    ccachedta->pending=0;
+   ccachedta->newblock=0;
 
    group_lock();
 #ifdef ENABLE_CRYPTO
@@ -676,6 +769,7 @@ CCACHEDTA *update_stored(char *hash, INOBNO *inobno, off_t offsetblock)
 #endif
       LDEBUG("got uncompsize : %lu", uncompdata->size);
       memcpy(&ccachedta->data, uncompdata->data, uncompdata->size);
+      ccachedta->updated=data->size;
       comprfree(uncompdata);
       release_compress_lock();
    } else {
@@ -741,24 +835,26 @@ pending:
    }
 
    if ( bsize < BLKSIZE ) {
-      data=check_block_exists(inobno); 
+      data=check_block_exists(inobno);
       if ( NULL != data ) {
          if (NULL == config->blockdatabs) {
             ccachedta=file_update_stored(data->data, inobno, offsetblock);
          } else {
-            ccachedta=update_stored(data->data, inobno, offsetblock);
+            ccachedta=update_stored((unsigned char *)data->data, inobno, offsetblock);
          }
          memcpy(&ccachedta->data[offsetblock],buf,bsize);
          DBTfree(data);
       }
-   } 
+   }
    if ( NULL == data ) {
       ccachedta=s_zmalloc(sizeof(CCACHEDTA));
       memcpy(&ccachedta->data[offsetblock],buf,bsize);
       ccachedta->creationtime=time(NULL);
       ccachedta->dirty=1;
       ccachedta->pending=0;
+      ccachedta->newblock=1;
    }
+
    p=(unsigned long long)ccachedta;
 // A full block can be processed right away.
    if ( bsize == BLKSIZE ) {
@@ -823,7 +919,8 @@ static int lessfs_statfs(const char *path, struct statvfs *stbuf)
 
 static int lessfs_release(const char *path, struct fuse_file_info *fi)
 {
-    DBT *dataptr;
+    const char *dataptr;
+    int vsize;
     MEMDDSTAT *memddstat;
     DBT *ddbuf;
 
@@ -833,39 +930,24 @@ static int lessfs_release(const char *path, struct fuse_file_info *fi)
     write_lock();
     flush_wait(fi->fh);
     release_write_lock();
-    dataptr = search_memhash(dbcache, &fi->fh, sizeof(unsigned long long));
+    dataptr = tctreeget(metatree, &fi->fh, sizeof(unsigned long long), &vsize);
     if (dataptr != NULL) {
-        memddstat = (MEMDDSTAT *) dataptr->data;
+        memddstat = (MEMDDSTAT *) dataptr;
         if (memddstat->opened == 1) {
 // Update the filesize when needed.
             update_filesize_onclose(fi->fh);
-#ifdef x86_64
-            LINFO
-                ("File %s size %lu bytes : lzo compressed bytes %llu and %llu duplicate blocks",
-                 path, memddstat->stbuf.st_size,
-                 memddstat->lzo_compressed_size, memddstat->deduplicated);
-#else
-            LINFO
-                ("File %s size %llu bytes : lzo compressed bytes %llu and %llu duplicate blocks",
-                 path, memddstat->stbuf.st_size,
-                 memddstat->lzo_compressed_size, memddstat->deduplicated);
-#endif
-            LINFO("File %s compression ratio : 1 : %f", path,
-                   (float) memddstat->stbuf.st_size /
-                   memddstat->lzo_compressed_size);
             LDEBUG("lessfs_release : Delete cache for %llu", fi->fh);
-            mdelete_key(dbcache, &fi->fh, sizeof(unsigned long long));
+            tctreeout(metatree, &fi->fh, sizeof(unsigned long long));
             if ( NULL == config->blockdatabs) fdatasync(fdbdta);
         } else {
             memddstat->opened--;
             ddbuf = create_mem_ddbuf(memddstat);
             LDEBUG("lessfs_release : %llu is now %u open", fi->fh,
                    memddstat->opened);
-            mbin_write_dbdata(dbcache, &fi->fh, sizeof(unsigned long long),
+            tctreeput(metatree, &fi->fh, sizeof(unsigned long long),
                               (void *) ddbuf->data, ddbuf->size);
             DBTfree(ddbuf);
         }
-        DBTfree(dataptr);
     }
     (void) path;
     (void) fi;
@@ -1307,8 +1389,6 @@ void *init_worker(void *arg)
     while (1) {
         if ( found[count] == 0 ) {
            sleep(1);
-           //LFATAL("cachetree %llu",tctreernum(cachetree));
-           //LFATAL("rdtree %llu",tctreernum(cachetree));
         } 
         found[count]=0;
         write_lock();
@@ -1325,7 +1405,7 @@ void *init_worker(void *arg)
               tctreeout(cachetree,key,size);
               found[count]++;
               release_write_lock();
-              cook_cache(dupkey,size,ccachedta); 
+              cook_cache(dupkey,size,ccachedta, count); 
               LDEBUG("Write %llu-%llu done get lock and delete cache",inobno[count]->inode,inobno[count]->blocknr);
               free(inobno[count]);
            } 
@@ -1346,19 +1426,9 @@ void mark_dirty()
     INUSE finuse;
     time_t thetime;
     unsigned long long inuse;
-#ifndef SHA3
-    word64 res[3];
-#endif
 
     brand=as_sprintf("LESSFS_DIRTY");
-    hash_lock();
-#ifdef SHA3
-    stiger=sha_binhash((unsigned char *)brand, strlen(brand));
-#else
-    binhash((unsigned char *)brand, strlen(brand), res);
-    stiger=(unsigned char *)&res;
-#endif
-    release_hash_lock();
+    stiger=thash((unsigned char *)brand, strlen(brand),MAX_ALLOWED_THREADS);
     thetime = time(NULL);
     inuse=thetime;
     if ( config->blockdatabs != NULL ) {
@@ -1370,9 +1440,7 @@ void mark_dirty()
         file_update_inuse(stiger,&finuse);
     }
     free(brand);
-#ifdef SHA3
     free(stiger);
-#endif
     tchdbsync(dbu); 
     return;
 }
@@ -1385,19 +1453,8 @@ int check_dirty()
     unsigned long long inuse;
     INUSE *finuse;
     int dirty=0;
-#ifndef SHA3
-    word64 res[3];
-#endif
-
     brand=as_sprintf("LESSFS_DIRTY");
-    hash_lock();
-#ifdef SHA3
-    stiger=sha_binhash((unsigned char *)brand, strlen(brand));
-#else
-    binhash((unsigned char *)brand, strlen(brand), res);
-    stiger=(unsigned char *)&res;
-#endif
-    release_hash_lock();
+    stiger=thash((unsigned char *)brand, strlen(brand), MAX_ALLOWED_THREADS);
     if ( NULL == config->blockdatabs ) {
       finuse=file_get_inuse(stiger);
       if ( NULL != finuse ) {
@@ -1408,9 +1465,7 @@ int check_dirty()
       inuse=getInUse(stiger);
       if ( 0 != inuse ) dirty=1;
     }
-#ifdef SHA3
     free(stiger);
-#endif
     free(brand);
     return(dirty);
 }
@@ -1429,15 +1484,12 @@ static void *lessfs_init()
     unsigned int count = 0;
     unsigned int *cnt;
     unsigned long long ldate;
-#ifndef SHA3
-    word64 res[3]; 
-#endif
     int ret;
     unsigned char *stiger;
     char *hashstr;
     INUSE *finuse;
     unsigned long long inuse;
-    struct tm * timeinfo;
+    struct tm * timeinfo=NULL;
     time_t tdate;
 
 #ifdef LZO
@@ -1445,7 +1497,7 @@ static void *lessfs_init()
 #endif
     if (NULL != getenv("MAX_THREADS"))
         max_threads = atoi(getenv("MAX_THREADS"));
-
+    if ( max_threads > MAX_ALLOWED_THREADS-1 ) die_dataerr("Configuration error : MAX_ALLOWED_THREADS should be less then %i",MAX_ALLOWED_THREADS-1);
     pthread_t worker_thread[max_threads];
     pthread_t ioctl_thread;
     pthread_t housekeeping_thread;
@@ -1473,14 +1525,8 @@ static void *lessfs_init()
         die_syserr();
 
     check_blocksize();
-#ifdef SHA3
-    hashstr=as_sprintf("BMW%i",config->hashlen);
-    stiger=sha_binhash((unsigned char *)hashstr, strlen(hashstr));
-#else
-    hashstr=as_sprintf("TGR%i",config->hashlen);
-    binhash((unsigned char *)hashstr, strlen(hashstr), res);
-    stiger=(unsigned char *)&res;
-#endif
+    hashstr=as_sprintf("%s%i",config->hash,config->hashlen);
+    stiger=thash((unsigned char *)hashstr, strlen(hashstr),MAX_ALLOWED_THREADS);
     if ( NULL == config->blockdatabs ) {
        if ( NULL == (finuse=file_get_inuse(stiger)))  {
            die_dataerr("Invalid hashsize or hash found, do not change hash or hashsize after formatting lessfs.");
@@ -1490,20 +1536,9 @@ static void *lessfs_init()
            die_dataerr("Invalid hashsize or hash found, do not change hash or hashsize after formatting lessfs.");
     }
     free(hashstr);
-#ifdef SHA3
     free(stiger);
-#endif
-
-
     if ( config->transactions ) {
-#ifdef SHA3
-       config->commithash=sha_binhash((unsigned char *)"COMMITSTAMP", strlen("COMMITSTAMP"));
-#else
-       binhash((unsigned char *)"COMMITSTAMP", strlen("COMMITSTAMP"), res);
-       config->commithash=s_malloc(config->hashlen);
-       memcpy(config->commithash,(unsigned char *)&res,config->hashlen);
-#endif
-
+       config->commithash=thash((unsigned char *)"COMMITSTAMP", strlen("COMMITSTAMP"),MAX_ALLOWED_THREADS);
        if ( config->blockdatabs != NULL ) {
            inuse=getInUse((unsigned char *)config->commithash);
            if ( 0 == inuse ) { 

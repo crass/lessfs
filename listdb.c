@@ -262,14 +262,14 @@ void listdbp()
                 ddstat = value_to_ddstat(data);
 #ifdef x86_64
                 printf
-                    ("ddstat->filename %s \n      ->inode %lu  -> size %lu\n",
+                    ("ddstat->filename %s \n      ->inode %lu  -> size %lu  -> real_size %llu\n",
                      ddstat->filename, ddstat->stbuf.st_ino,
-                     ddstat->stbuf.st_size);
+                     ddstat->stbuf.st_size, ddstat->real_size);
 #else
                 printf
-                    ("ddstat->filename %s \n      ->inode %llu -> size %llu\n",
+                    ("ddstat->filename %s \n      ->inode %llu -> size %llu -> real_size %llu\n",
                      ddstat->filename, ddstat->stbuf.st_ino,
-                     ddstat->stbuf.st_size);
+                     ddstat->stbuf.st_size, ddstat->real_size);
 #endif
                 if (S_ISDIR(ddstat->stbuf.st_mode)) {
                     printf("      ->filename %s is a directory\n",

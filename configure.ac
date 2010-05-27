@@ -41,11 +41,11 @@ AC_FUNC_SELECT_ARGTYPES
 AC_TYPE_SIGNAL
 AC_FUNC_STAT
 AC_FUNC_STRCOLL
-AC_CHECK_FUNCS([getpass uname strcasecmp bzero gethostbyaddr gethostbyname gettimeofday memmove memset mkdir select setenv socket strchr strdup strerror strrchr strstr])
+AC_CHECK_FUNCS([getpass uname strcasecmp bzero gethostbyaddr gethostbyname gettimeofday memmove memset mkdir select setenv socket strchr strdup strerror strrchr strstr mhash_init])
 
-AC_CHECK_HEADERS([sys/vfs.h arpa/inet.h fcntl.h inttypes.h limits.h malloc.h memory.h netdb.h netinet/in.h stddef.h stdint.h stdlib.h string.h strings.h sys/socket.h sys/time.h syslog.h unistd.h utime.h])
-
+AC_CHECK_HEADERS([sys/vfs.h arpa/inet.h fcntl.h inttypes.h limits.h malloc.h memory.h netdb.h netinet/in.h stddef.h stdint.h stdlib.h string.h strings.h sys/socket.h sys/time.h syslog.h unistd.h utime.h mhash.h])
 # Check whether to enable filesystem encryption
+CRYPTO_LIBS="$LIBS -lmhash"
 CRYPTO_MSG="no"
 AC_ARG_WITH(crypto,
         [  --with-crypto           Enable lessfs filesystem encryption.],
@@ -53,7 +53,7 @@ AC_ARG_WITH(crypto,
                 if test "x$withval" != "xno" ; then
                         AC_DEFINE(ENABLE_CRYPTO, 1,
                                 [Define if you want to allow filesystem encryption])
-			CRYPTO_LIBS="$LIBS -lssl"
+			CRYPTO_LIBS="$LIBS -lssl -lmhash"
                         CRYPTO_MSG="yes"
 			AC_CHECK_HEADERS(openssl/ssl.h, [], [], [
 			])
@@ -87,19 +87,6 @@ AC_ARG_ENABLE(debug,
                         AC_DEFINE(DEBUG, 1,
                                 [Define if you want debug information])
                         DEBUG_MSG="yes"
-                fi
-        ]
-)
-
-SHA3_MSG="no"
-AC_ARG_WITH(sha3,
-        [  --with-sha3             Enable the use of Blue Midnight Wish instead of tiger hashes.],
-        [
-                if test "x$withval" != "xno" ; then
-                        AC_DEFINE(SHA3, 1,
-                                [Define if you want Blue Midnight Wish hashes])
-                        EXTRAFILES=lib_BMW.c
-                        SHA3_MSG="yes"
                 fi
         ]
 )
