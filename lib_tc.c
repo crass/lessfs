@@ -106,7 +106,6 @@ u_int32_t db_flags, env_flags;
 
 unsigned char *thash(unsigned char *buf, int size, int thread_number)
 {
-    int i;
     MHASH td[MAX_ALLOWED_THREADS];
     unsigned char *hash[thread_number];
 
@@ -2891,7 +2890,7 @@ void parseconfig(int mklessfs)
           config->selected_hash=MHASH_RIPEMD256;
           LINFO("The RIPEMD256 hash has been selected");
        }
-       if ( config->selected_hash = MHASH_TIGER192 )
+       if ( config->selected_hash == MHASH_TIGER192 )
           LINFO("The TIGER192 hash has been selected");
     } else  LINFO("The TIGER hash has been selected");
     iv = getenv("HASHLEN");
