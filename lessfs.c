@@ -89,8 +89,6 @@
 #endif
 #include "commons.h"
 
-char *lfsmsg=NULL;
-
 void segvExit()
 {
     LFATAL("Exit caused by segfault!, exitting\n");
@@ -114,6 +112,7 @@ void libSafeExit()
 
 char *lessfs_stats()
 {
+    char *lfsmsg;
     char *msg2;
     char *line;
     unsigned long long nextinode;
@@ -213,6 +212,7 @@ void dbsync()
 static int lessfs_getattr(const char *path, struct stat *stbuf)
 {
     int res;
+    char *lfsmsg; 
 
     FUNC;
     LDEBUG("lessfs_getattr %s", path);
@@ -225,8 +225,9 @@ static int lessfs_getattr(const char *path, struct stat *stbuf)
     LDEBUG("lessfs_getattr : %s size %llu : result %i",path,
            (unsigned long long) stbuf->st_size, res);
     if ( 0 == strcmp("/.lessfs/lessfs_stats",path)){
-       if (NULL == lfsmsg) lfsmsg=lessfs_stats();
+       lfsmsg=lessfs_stats();
        stbuf->st_size=strlen(lfsmsg);
+       free(lfsmsg);
     }
     release_global_lock();
     return (res);
@@ -650,12 +651,11 @@ static int lessfs_open(const char *path, struct fuse_file_info *fi)
 
 void write_lessfs_stats(char *buf, size_t size, off_t offset)
 {
-    LFATAL("write_lessfs_stats : size=%llu, offset=%llu",size,offset);
+    char *lfsmsg;
     memset(buf,0,size);
-    if ( NULL == lfsmsg) lfsmsg=lessfs_stats();
+    lfsmsg=lessfs_stats();
     memcpy(buf,lfsmsg+offset,size);
-    if (lfsmsg) free(lfsmsg);
-    lfsmsg=NULL;
+    free(lfsmsg);
     return;
 }
 
