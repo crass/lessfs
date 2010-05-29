@@ -717,7 +717,9 @@ void write_file_ent(const char *filename, unsigned long long inode,
       stbuf.st_nlink = 2;
     } else stbuf.st_nlink = 1;
     if (!isrootdir) {
-        if ( 0 == strcmp(filename,"/lost+found") || 0 == strcmp(filename,"/.lessfs_stats")){
+        if ( 0 == strcmp(filename,"/lost+found") ||\
+             0 == strcmp(filename,"/.lessfs")||\
+             0 == strcmp(filename,"/.lessfs/lessfs_stats")){
            stbuf.st_uid = 0;
            stbuf.st_gid = 0;
         } else {

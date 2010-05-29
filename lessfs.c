@@ -227,6 +227,8 @@ static int lessfs_getattr(const char *path, struct stat *stbuf)
     if ( 0 == strcmp("/.lessfs/lessfs_stats",path)){
        lfsmsg=lessfs_stats();
        stbuf->st_size=strlen(lfsmsg);
+       if (lfsmsg) free(lfsmsg);
+       lfsmsg=NULL;
     }
     release_global_lock();
     return (res);
@@ -650,10 +652,12 @@ static int lessfs_open(const char *path, struct fuse_file_info *fi)
 
 void write_lessfs_stats(char *buf, size_t size, off_t offset)
 {
+    LFATAL("write_lessfs_stats : size=%llu, offset=%llu",size,offset);
     memset(buf,0,size);
-    lfsmsg=lessfs_stats(0);
+    lfsmsg=lessfs_stats();
     memcpy(buf,lfsmsg+offset,size);
-    free(lfsmsg);
+    if (lfsmsg) free(lfsmsg);
+    lfsmsg=NULL;
     return;
 }
 
@@ -669,11 +673,12 @@ static int lessfs_read(const char *path, char *buf, size_t size,
 
     FUNC;
 
+    get_global_lock();
     if ( fi->fh == 7 ) {
        write_lessfs_stats(buf,size,offset);
-       return(strlen(buf)+1);
+       release_global_lock();
+       return(size);
     }
-    get_global_lock();
 // Change this to creating a buffer that is allocated once.
     tmpbuf = s_zmalloc(BLKSIZE + 1);
     memset(buf, 0, size);
