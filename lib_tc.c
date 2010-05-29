@@ -811,7 +811,7 @@ void formatfs()
     if ( config->blockdatabs != NULL ) {
         update_inuse(stiger,1);
     } else {
-        inuse.inuse=0;
+        inuse.inuse=1;
         inuse.size=0;
         inuse.offset=0;
         file_update_inuse(stiger,&inuse);
@@ -840,6 +840,8 @@ void formatfs()
     }
     write_nfi(nextinode);
     fs_mkdir("/", stbuf.st_mode);
+    fs_mkdir("/.lessfs", stbuf.st_mode);
+    dbmknod("/.lessfs/lessfs_stats", 0755 | S_IFREG, NULL, 0);
     tc_close(0);
     return;
 }
@@ -1919,12 +1921,6 @@ int fs_mkdir(const char *path, mode_t mode)
     inode = get_next_inode();
     write_file_ent(rdir, inode, S_IFDIR | 0755, NULL, 0);
     free(rdir);
-    if (rootdir) {
-        inode = get_next_inode();
-        rdir = as_sprintf("%s.lessfs_stats", path);
-        write_file_ent(rdir, inode, S_IFREG | 0755, NULL, 0);
-        free(rdir);
-    }
     /* Change ctime and mtime of the parentdir Posix std posix behavior */
     pdir = s_dirname((char *) path);
     res = update_parent_time(pdir,1);
@@ -2864,9 +2860,11 @@ void parseconfig(int mklessfs)
     config->encryptdata = 0;
     config->encryptmeta = 1;
     config->hashlen = 24;
+    config->hash="MHASH_TIGER192";
     config->selected_hash = MHASH_TIGER192;
     iv = getenv("HASHNAME");
     if ( NULL != iv ) {
+       config->hash=iv;
        if ( 0 == strcmp("MHASH_SHA256", iv )) {
           config->selected_hash=MHASH_SHA256;
           LINFO("The SHA256 hash has been selected");

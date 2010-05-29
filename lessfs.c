@@ -89,6 +89,8 @@
 #endif
 #include "commons.h"
 
+char *lfsmsg=NULL;
+
 void segvExit()
 {
     LFATAL("Exit caused by segfault!, exitting\n");
@@ -112,7 +114,6 @@ void libSafeExit()
 
 char *lessfs_stats()
 {
-    char *msg;
     char *msg2;
     char *line;
     unsigned long long nextinode;
@@ -126,8 +127,7 @@ char *lessfs_stats()
     char *nfi = "NFI";
     CRYPTO *crypto;
 
-
-    msg=as_sprintf("INODE	   SIZE 	   COMPRESSED_SIZE	 FILENAME\n");
+    lfsmsg=as_sprintf("INODE       SIZE            COMPRESSED_SIZE       FILENAME\n");
     /* traverse records */
     tchdbiterinit(dbp);
     while ((key = tchdbiternext(dbp, &ksize)) != NULL) {
@@ -141,17 +141,17 @@ char *lessfs_stats()
                 if (S_ISREG(ddstat->stbuf.st_mode)) {
 #ifdef x86_64
                    line=as_sprintf
-                       ("%lu		%lu		%llu		%s\n",
+                       ("%lu            %lu             %llu            %s\n",
                         ddstat->stbuf.st_ino, ddstat->stbuf.st_size,
                         ddstat->real_size, ddstat->filename);
 #else
                    line=as_sprintf
-                       ("%llu		%llu		%llu		%s\n",
+                       ("%llu           %llu            %llu            %s\n",
                         ddstat->stbuf.st_ino, ddstat->stbuf.st_size,
                         ddstat->real_size, ddstat->filename);
 #endif
-                   msg2=msg;
-                   msg=as_strcat(msg2,line);
+                   msg2=lfsmsg;
+                   lfsmsg=as_strcat(msg2,line);
                    free(msg2);
                    free(line);
                 }
@@ -161,9 +161,8 @@ char *lessfs_stats()
         }
         free(key);
     }
-    return msg;
+    return lfsmsg;
 }
-
 
 int check_path_sanity(const char *path)
 {
@@ -214,7 +213,6 @@ void dbsync()
 static int lessfs_getattr(const char *path, struct stat *stbuf)
 {
     int res;
-    char *msg;
 
     FUNC;
     LDEBUG("lessfs_getattr %s", path);
@@ -224,13 +222,11 @@ static int lessfs_getattr(const char *path, struct stat *stbuf)
 
     get_global_lock();
     res = dbstat(path, stbuf);
-    LDEBUG("lessfs_getattr : st_nlinks=%u", stbuf->st_nlink);
     LDEBUG("lessfs_getattr : %s size %llu : result %i",path,
            (unsigned long long) stbuf->st_size, res);
-    if ( 0 == strcmp("/.lessfs_stats",path)){
-       msg=lessfs_stats();
-       stbuf->st_size=strlen(msg);
-       free(msg);
+    if ( 0 == strcmp("/.lessfs/lessfs_stats",path)){
+       lfsmsg=lessfs_stats();
+       stbuf->st_size=strlen(lfsmsg);
     }
     release_global_lock();
     return (res);
@@ -310,7 +306,7 @@ static int lessfs_unlink(const char *path)
     int res;
     FUNC;
 // /.lessfs_stats can not be deleted
-    if ( 0 == strcmp(path,"/.lessfs_stats")) return(0);
+    if ( 0 == strcmp(path,"/.lessfs/lessfs_stats")) return(0);
     get_global_lock();
     write_lock();
     if (NULL != config->blockdatabs) {
@@ -654,12 +650,10 @@ static int lessfs_open(const char *path, struct fuse_file_info *fi)
 
 void write_lessfs_stats(char *buf, size_t size, off_t offset)
 {
-    char *msg;
-
     memset(buf,0,size);
-    msg=lessfs_stats();
-    memcpy(buf,msg,strlen(msg)+1);
-    free(msg);
+    lfsmsg=lessfs_stats(0);
+    memcpy(buf,lfsmsg+offset,size);
+    free(lfsmsg);
     return;
 }
 
@@ -675,7 +669,7 @@ static int lessfs_read(const char *path, char *buf, size_t size,
 
     FUNC;
 
-    if ( fi->fh == 4 ) {
+    if ( fi->fh == 7 ) {
        write_lessfs_stats(buf,size,offset);
        return(strlen(buf)+1);
     }
