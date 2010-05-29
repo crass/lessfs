@@ -225,10 +225,8 @@ static int lessfs_getattr(const char *path, struct stat *stbuf)
     LDEBUG("lessfs_getattr : %s size %llu : result %i",path,
            (unsigned long long) stbuf->st_size, res);
     if ( 0 == strcmp("/.lessfs/lessfs_stats",path)){
-       lfsmsg=lessfs_stats();
+       if (NULL == lfsmsg) lfsmsg=lessfs_stats();
        stbuf->st_size=strlen(lfsmsg);
-       if (lfsmsg) free(lfsmsg);
-       lfsmsg=NULL;
     }
     release_global_lock();
     return (res);
@@ -654,7 +652,7 @@ void write_lessfs_stats(char *buf, size_t size, off_t offset)
 {
     LFATAL("write_lessfs_stats : size=%llu, offset=%llu",size,offset);
     memset(buf,0,size);
-    lfsmsg=lessfs_stats();
+    if ( NULL == lfsmsg) lfsmsg=lessfs_stats();
     memcpy(buf,lfsmsg+offset,size);
     if (lfsmsg) free(lfsmsg);
     lfsmsg=NULL;
