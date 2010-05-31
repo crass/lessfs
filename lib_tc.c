@@ -1038,7 +1038,7 @@ unsigned long long readBlock(unsigned long long blocknr,
             die_dataerr("Could not find block");
         }
         DBTfree(tdata);
-        if (cdata->size < BLKSIZE ) {
+        //if (cdata->size < BLKSIZE ) {
            compress_lock();
 #ifdef LZO
            data = (DBT *)lzo_decompress(cdata->data, cdata->size);
@@ -1050,15 +1050,15 @@ unsigned long long readBlock(unsigned long long blocknr,
            ret = data->size;
            DBTfree(data);
            release_compress_lock();
-        } else {
-           memcpy(blockdata, cdata->data, cdata->size);
-           ret = cdata->size;
-           DBTfree(cdata);
-        }
+        //} else {
+        //   memcpy(blockdata, cdata->data, cdata->size);
+        //   ret = cdata->size;
+        //   DBTfree(cdata);
+        //}
         release_group_lock();
 // When we read a block < BLKSIZE there it is likely that we need
 // to read it again so it makes sense to put it in a cache.
-        if ( size != BLKSIZE ) {
+        if ( size < BLKSIZE ) {
 // Make sure that we don't overflow the cache.
            if ( tctreernum(cachetree)*2 > config->cachesize ||\
                 tctreernum(rdtree)*2 > config->cachesize ) {
@@ -1071,16 +1071,18 @@ unsigned long long readBlock(unsigned long long blocknr,
            ccachedta->pending=0;
            ccachedta->creationtime=time(NULL);
            memcpy(&ccachedta->data, blockdata, ret);
+           ccachedta->datasize=ret;
            tctreeput(rdtree, (void *)&inobno, sizeof(INOBNO), (void *)&p, sizeof(unsigned long long));
         }
         release_write_lock();
+        ret=BLKSIZE;
         return(ret);
 // Fetch the block from disk and put it in the cache.
      }
      memcpy(&p,cachedata,vsize);
      ccachedta=(CCACHEDTA *)p;
      ccachedta->creationtime=time(NULL); 
-     memcpy(blockdata, &ccachedta->data, BLKSIZE);
+     memcpy(blockdata, &ccachedta->data, ccachedta->datasize);
      ret = BLKSIZE;
      release_write_lock();
      return (ret);
@@ -1929,8 +1931,8 @@ int fs_mkdir(const char *path, mode_t mode)
     return (res);
 }
 
-unsigned int db_commit_block(unsigned char *dbdata, unsigned char *chksum,
-                             INOBNO inobno, bool delete)
+unsigned int db_commit_block(unsigned char *dbdata,
+                             INOBNO inobno,unsigned long dsize)
 {
     unsigned char *stiger=NULL;
     compr *compressed;
@@ -1939,14 +1941,14 @@ unsigned int db_commit_block(unsigned char *dbdata, unsigned char *chksum,
 
     FUNC;
     group_lock();
-    stiger=thash(dbdata, BLKSIZE,MAX_ALLOWED_THREADS-1);
+    stiger=thash(dbdata, dsize,MAX_ALLOWED_THREADS-1);
     inuse = getInUse(stiger);
     if (0 == inuse) {
        compress_lock();
 #ifdef LZO
-       compressed = lzo_compress((unsigned char *) dbdata, BLKSIZE);
+       compressed = lzo_compress((unsigned char *) dbdata, dsize);
 #else
-       compressed = clz_compress((unsigned char *) dbdata, BLKSIZE);
+       compressed = clz_compress((unsigned char *) dbdata, dsize);
 #endif
        ret = compressed->size;
        bin_write_dbdata(dbdta,stiger,config->hashlen,compressed->data,compressed->size);
@@ -2025,22 +2027,20 @@ void partial_truncate_block(struct stat *stbuf, unsigned long long blocknr,
     }
     release_group_lock();
     blockdata = s_zmalloc(BLKSIZE);
-    if (data->size != BLKSIZE) {
-        compress_lock();
+    compress_lock();
 #ifdef LZO
-        uncompdata = lzo_decompress(data->data, data->size);
+    uncompdata = lzo_decompress(data->data, data->size);
 #else
-        uncompdata = clz_decompress(data->data, data->size);
+    uncompdata = clz_decompress(data->data, data->size);
 #endif
-        if ( uncompdata->size >= offset ) {
-           memcpy(blockdata, uncompdata->data, offset);
-        } else memcpy(blockdata, uncompdata->data, uncompdata->size);
-        comprfree(uncompdata);
-        release_compress_lock();
+    if ( uncompdata->size >= offset ) {
+       memcpy(blockdata, uncompdata->data, offset);
     } else {
-        memcpy(blockdata, data->data, offset);
+       memcpy(blockdata, uncompdata->data, uncompdata->size);
     }
-    db_commit_block(blockdata, NULL,inobno,0);
+    comprfree(uncompdata);
+    release_compress_lock();
+    db_commit_block(blockdata,inobno,offset);
     free(stiger);
     DBTfree(data);
     free(blockdata);
@@ -3356,10 +3356,10 @@ void tc_write_cache(CCACHEDTA *ccachedta, INOBNO *inobno)
       compress_lock();
 #ifdef LZO
       compressed =
-            lzo_compress(ccachedta->data, BLKSIZE);
+            lzo_compress(ccachedta->data, ccachedta->datasize);
 #else
       compressed =
-            clz_compress(ccachedta->data, BLKSIZE);
+            clz_compress(ccachedta->data, ccachedta->datasize);
 #endif
       bin_write_dbdata(dbdta,&ccachedta->hash,config->hashlen,compressed->data,compressed->size);
       if ( ccachedta->newblock == 1 ) update_meta(inobno->inode,compressed->size,1);
@@ -3389,7 +3389,7 @@ void cook_cache(char *key, int ksize, CCACHEDTA *ccachedta, int tnum)
 
    inobno=(INOBNO *)key;
    LDEBUG("cook_cache : %llu-%llu",inobno->inode,inobno->blocknr);
-   hash=thash((unsigned char *)&ccachedta->data, BLKSIZE, tnum);
+   hash=thash((unsigned char *)&ccachedta->data, ccachedta->datasize, tnum);
    memcpy(&ccachedta->hash,hash,config->hashlen);
    free(hash);
    group_lock();

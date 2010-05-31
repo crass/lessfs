@@ -38,20 +38,29 @@ extern int BLKSIZE;
 typedef unsigned int ui32;
 typedef unsigned short int ui16;
 
+// Return the decompressed block without the 
+// leading byte that informs about the used compression
+// First byte = 'Q' Indicates that the block is QLZ compressed
+// First byte = 0 The block is not compressed
+// First byte = 'L' Indicates that the block is LZO compressed
 compr *clz_decompress(unsigned char *buf, int buflen)
 {
     compr *retdata;
     char *scratch;
-    retdata = s_malloc(sizeof(compr));
-    retdata->size = qlz_size_decompressed((char *) buf);
-    retdata->data = s_malloc(retdata->size);
-
-    // SCRATCH_DECOMPRESS is defined in the beginning of the quicklz.c file
-    scratch = (char *) malloc(QLZ_SCRATCH_COMPRESS);
-
-    // decompress and write result
-    retdata->size = qlz_decompress((char *) buf, retdata->data, scratch);
-    free(scratch);
+    retdata = s_zmalloc(sizeof(compr));
+    if ( buf[0] == 'Q') {
+       retdata->size = qlz_size_decompressed((char *) &buf[1]);
+       retdata->data = s_malloc(retdata->size);
+       // SCRATCH_DECOMPRESS is defined in the beginning of the quicklz.c file
+       scratch = (char *) s_malloc(QLZ_SCRATCH_COMPRESS);
+       // decompress and write result
+       retdata->size = qlz_decompress((char *) &buf[1], retdata->data, scratch);
+       free(scratch);
+    } else {
+       retdata->size=buflen-1;
+       retdata->data = s_malloc(retdata->size);
+       memcpy(retdata->data,&buf[1],buflen-1);
+    }
     return retdata;
 }
 
@@ -59,18 +68,22 @@ compr *clz_compress(unsigned char *buf, int buflen)
 {
     compr *retdata;
     char *scratch;
-    retdata = s_malloc(sizeof(compr));
+    retdata = s_zmalloc(sizeof(compr));
 
     // allocate "uncompressed size" + 400 for the destination buffer
-    retdata->data = s_malloc(buflen + 400);
+    retdata->data = s_malloc(buflen + 400); // One extra for compression type
 
     // SCRATCH_COMPRESS is defined in the beginning of the lib_qlz.c file
     scratch = s_malloc(QLZ_SCRATCH_COMPRESS);
     retdata->size =
-        qlz_compress(buf, (char *) retdata->data, buflen, scratch);
+        qlz_compress(buf, (char *) &retdata->data[1], buflen, scratch);
     if (retdata->size >= buflen) {
-        retdata->size = buflen;
-        memcpy(retdata->data, buf, buflen);
+        retdata->size = buflen+1;
+        memcpy(&retdata->data[1], buf, buflen);
+        retdata->data[0]=0;
+    } else { 
+        retdata->data[0]='Q';
+        retdata->size++;
     }
     free(scratch);
     return retdata;

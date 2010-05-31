@@ -72,6 +72,7 @@ typedef struct {
 
 typedef struct {
     unsigned char data[MAX_FUSE_BLKSIZE];
+    unsigned long datasize;
     unsigned char hash[MAX_HASH_LEN];
     int dirty;
     time_t creationtime;

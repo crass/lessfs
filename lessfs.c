@@ -714,6 +714,7 @@ static int lessfs_read(const char *path, char *buf, size_t size,
               }
         }
         pass++;
+        memset(tmpbuf,0,BLKSIZE+1);
     }
     free(tmpbuf);
     release_global_lock();
@@ -755,7 +756,7 @@ CCACHEDTA *update_stored(unsigned char *hash, INOBNO *inobno, off_t offsetblock)
          data = encrypted;
    }
 #endif
-   if (data->size < BLKSIZE) {
+//   if (data->size < BLKSIZE) {
       compress_lock();
 #ifdef LZO
       uncompdata = lzo_decompress(data->data, data->size);
@@ -766,13 +767,15 @@ CCACHEDTA *update_stored(unsigned char *hash, INOBNO *inobno, off_t offsetblock)
 #endif
       LDEBUG("got uncompsize : %lu", uncompdata->size);
       memcpy(&ccachedta->data, uncompdata->data, uncompdata->size);
+      ccachedta->datasize=uncompdata->size;
       ccachedta->updated=data->size;
       comprfree(uncompdata);
       release_compress_lock();
-   } else {
-      LDEBUG("Got data->size %lu", data->size);
-      memcpy(&ccachedta->data, data->data, data->size);
-   }
+//   } else {
+//      LDEBUG("Got data->size %lu", data->size);
+//      memcpy(&ccachedta->data, data->data, data->size);
+//      ccachedta->datasize=data->size;
+//   }
    DBTfree(data);
    delete_dbb(inobno);
    inuse = getInUse(hash);
@@ -826,6 +829,7 @@ pending:
      ccachedta->pending=0;
      LDEBUG("Set ccachedta->dirty=1 for %llu-%llu",inobno->inode,inobno->blocknr);
      memcpy((void *)&ccachedta->data[offsetblock],buf,bsize);
+     if ( ccachedta->datasize < offsetblock+bsize ) ccachedta->datasize=offsetblock+bsize;
      release_write_lock();
      EFUNC;
      return;
@@ -840,12 +844,14 @@ pending:
             ccachedta=update_stored((unsigned char *)data->data, inobno, offsetblock);
          }
          memcpy(&ccachedta->data[offsetblock],buf,bsize);
+         if ( ccachedta->datasize < offsetblock+bsize ) ccachedta->datasize=offsetblock+bsize;
          DBTfree(data);
       }
    }
    if ( NULL == data ) {
       ccachedta=s_zmalloc(sizeof(CCACHEDTA));
       memcpy(&ccachedta->data[offsetblock],buf,bsize);
+      ccachedta->datasize=offsetblock+bsize;
       ccachedta->creationtime=time(NULL);
       ccachedta->dirty=1;
       ccachedta->pending=0;
