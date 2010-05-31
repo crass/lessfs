@@ -79,7 +79,6 @@ compr *lzo_compress(unsigned char *buf, int buflen)
     compr *retdata;
 
     retdata = s_malloc(sizeof(compr));
-
     in = (lzo_bytep) buf;
     out = (lzo_bytep) lzo_malloc(OUT_LEN);
     wrkmem = (lzo_bytep) lzo_malloc(LZO1A_MEM_COMPRESS);
@@ -96,15 +95,17 @@ compr *lzo_compress(unsigned char *buf, int buflen)
     }
     /* check for an incompressible block */
     if (out_len >= buflen) {
-        // LINFO("This block contains incompressible data.\n");
-        retdata->data = s_malloc(buflen);
-        memcpy(retdata->data, buf, buflen);
-        retdata->size = buflen;
+     // LINFO("This block contains incompressible data.\n");
+        retdata->data = s_malloc(buflen+1);
+        memcpy(&retdata->data[1], buf, buflen);
+        retdata->size = buflen+1;
+        retdata->data[0]=0;
     } else {
         // LDEBUG("Compressed %i bytes to %lu bytes",buflen,(unsigned long)out_len);
-        retdata->data = s_malloc(out_len);
-        retdata->size = out_len;
-        memcpy(retdata->data, out, out_len);
+        retdata->data = s_malloc(out_len+1);
+        retdata->size = out_len+1;
+        memcpy(&retdata->data[1], out, out_len);
+        retdata->data[0]='L';
     }
     lzo_free(wrkmem);
     lzo_free(out);
@@ -124,28 +125,34 @@ compr *lzo_decompress(unsigned char *buf, int buflen)
     FUNC;
 
     retdata = s_malloc(sizeof(compr));
-    in_len = buflen;
+ 
+    if ( buf[0] == 'L') {
+       in_len = buflen-1;
+       in = (lzo_bytep) &buf[1];
+       out = (lzo_bytep) lzo_malloc(BLKSIZE);
+       wrkmem = (lzo_bytep) lzo_malloc(LZO1A_MEM_COMPRESS);        //FASTER
+       if (in == NULL || out == NULL || wrkmem == NULL) {
+           LFATAL("out of memory\n");
+           exit(3);
+       }
 
-    in = (lzo_bytep) buf;
-    out = (lzo_bytep) lzo_malloc(BLKSIZE);
-    wrkmem = (lzo_bytep) lzo_malloc(LZO1A_MEM_COMPRESS);        //FASTER
-    if (in == NULL || out == NULL || wrkmem == NULL) {
-        LFATAL("out of memory\n");
-        exit(3);
+       r = lzo1a_decompress(in, in_len, out, &out_len, NULL);
+       if (r != LZO_E_OK) {
+           /* this should NEVER happen */
+           LFATAL("internal error - decompression failed: %d\n", r);
+           exit(22);
+       }
+
+       retdata->data = s_malloc(out_len);
+       retdata->size = out_len;
+       memcpy(retdata->data, out, out_len);
+       lzo_free(wrkmem);
+       lzo_free(out);
+    } else {
+       retdata->size=buflen-1;
+       retdata->data = s_malloc(retdata->size);
+       memcpy(retdata->data,&buf[1],buflen-1);
     }
-
-    r = lzo1a_decompress(in, in_len, out, &out_len, NULL);
-    if (r != LZO_E_OK) {
-        /* this should NEVER happen */
-        LFATAL("internal error - decompression failed: %d\n", r);
-        exit(22);
-    }
-
-    retdata->data = s_malloc(out_len);
-    retdata->size = out_len;
-    memcpy(retdata->data, out, out_len);
-    lzo_free(wrkmem);
-    lzo_free(out);
     return retdata;
 }
 #endif
