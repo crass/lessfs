@@ -2,7 +2,7 @@
 # Process this file with autoconf to produce a configure script.
 
 AC_PREREQ(2.01)
-AC_INIT(lessfs, 1.0.8, bugs@lessfs.com)
+AC_INIT(lessfs, 1.1.0, bugs@lessfs.com)
 AM_INIT_AUTOMAKE([foreign])
 AC_CONFIG_SRCDIR([listdb.c])
 AC_CONFIG_HEADER([config.h])
@@ -47,6 +47,13 @@ AC_CHECK_HEADERS([sys/vfs.h arpa/inet.h fcntl.h inttypes.h limits.h malloc.h mem
 # Check whether to enable filesystem encryption
 CRYPTO_LIBS="$LIBS -lmhash"
 CRYPTO_MSG="no"
+
+
+AC_CHECK_HEADER(mhash.h,
+                [AC_DEFINE(HAVE_MHASH_H)],
+                [AC_MSG_ERROR([Please install mhash])])
+
+
 AC_ARG_WITH(crypto,
         [  --with-crypto           Enable lessfs filesystem encryption.],
         [
@@ -64,11 +71,11 @@ AC_ARG_WITH(crypto,
 
 LZO_MSG="no"
 AC_ARG_WITH(lzo,
-        [  --with-lzo              Enable the use of LZO compression instead of QUICKLZ.],
+        [  --with-lzo              Enable the use of LZO compression.],
         [
                 if test "x$withval" != "xno" ; then
                         AC_DEFINE(LZO, 1,
-                                [Define if you want LZO compression])
+                                [Define if you want to enable LZO compression])
 			LZO_LIBS="$LIBS -llzo2"
                         EXTRAFILES=lib_lzo.c
 			AC_CHECK_HEADERS(lzo/lzoconf.h, [], [], [

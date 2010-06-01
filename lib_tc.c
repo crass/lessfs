@@ -383,7 +383,7 @@ void tc_open(bool defrag, bool createpath)
             if (-1 == (stat(config->blockdata, &stbuf)))
                 die_syserr();
             hashstr=as_sprintf("NEXTOFFSET");
-            config->nexthash=thash((unsigned char *)hashstr, strlen(hashstr),MAX_ALLOWED_THREADS);
+            config->nexthash=(char *)thash((unsigned char *)hashstr, strlen(hashstr),MAX_ALLOWED_THREADS);
             data = search_dbdata(dbu, config->nexthash, config->hashlen);
             if ( NULL == data ) { 
                  LFATAL("Filesystem upgraded to support transactions");
@@ -503,6 +503,7 @@ void get_global_lock()
 void group_lock()
 {
     FUNC;
+    return;
     pthread_mutex_lock(&group_mutex);
     EFUNC;
     return;
@@ -528,6 +529,7 @@ void release_write_lock()
 void compress_lock()
 {
     FUNC;
+    return;
     pthread_mutex_lock(&compress_mutex);
     EFUNC;
     return;
@@ -536,6 +538,7 @@ void compress_lock()
 void release_compress_lock()
 {
     FUNC;
+    return;
     pthread_mutex_unlock(&compress_mutex);
     EFUNC;
     return;
@@ -563,6 +566,7 @@ void release_compress_lock()
 void release_group_lock()
 {
     FUNC;
+    return;
     pthread_mutex_unlock(&group_mutex);
     EFUNC;
     return;
@@ -822,7 +826,7 @@ void formatfs()
     
 #ifdef ENABLE_CRYPTO
     if (config->encryptdata) {
-        stiger=thash(config->passwd, strlen((char *) config->passwd,MAX_ALLOWED_THREADS);
+        stiger=thash(config->passwd, strlen((char *) config->passwd),MAX_ALLOWED_THREADS);
         loghash("store passwd as hash", stiger);
         memcpy(&crypto.passwd, stiger, config->hashlen);
         memcpy(&crypto.iv, config->iv, 8);
@@ -1005,6 +1009,53 @@ void comprfree(compr * compdata)
 }
 
 
+DBT *lfsdecompress(DBT *cdata)
+{
+   DBT *data=NULL;
+   bool done=0;
+   int rsize;
+   DBT *decrypted;
+
+   decrypted=cdata;
+#ifdef ENABLE_CRYPTO
+
+   if (config->encryptdata){
+      decrypted=decrypt(cdata);
+   }
+#endif
+
+   if ( decrypted->data[0] == 0 || decrypted->data[0] == 'Q') {
+      data = (DBT *)clz_decompress(decrypted->data, decrypted->size);
+      done=1;
+   }
+#ifdef LZO
+   if ( decrypted->data[0] == 'L') {
+      data = lzo_decompress(decrypted->data, decrypted->size);
+      done=1;
+   }
+#endif
+   if ( decrypted->data[0] == 'G') {
+      data=s_malloc(sizeof(DBT));
+      data->data = (unsigned char *)tcgzipdecode((const char *)&decrypted->data[1], decrypted->size-1, &rsize);
+      data->size=rsize;
+      done=1;
+   }
+   if ( decrypted->data[0] == 'B') {
+      data=s_malloc(sizeof(DBT));
+      data->data = (unsigned char *)tcbzipdecode((const char *)&decrypted->data[1], decrypted->size-1, &rsize);
+      data->size=rsize;
+      done=1;
+   }
+   if ( decrypted->data[0] == 'D') {
+      data=s_malloc(sizeof(DBT));
+      data->data = (unsigned char *)tcinflate((const char *)&decrypted->data[1], decrypted->size-1, &rsize);
+      data->size=rsize;
+      done=1;
+   }
+   if (!done) die_dataerr("Data found with unsupported compression type %c",decrypted->data[0]);
+   return data;
+}
+
 unsigned long long readBlock(unsigned long long blocknr,
                              const char *filename, char *blockdata,
                              unsigned long long inode, size_t size)
@@ -1038,24 +1089,14 @@ unsigned long long readBlock(unsigned long long blocknr,
             die_dataerr("Could not find block");
         }
         DBTfree(tdata);
-        //if (cdata->size < BLKSIZE ) {
-           compress_lock();
-#ifdef LZO
-           data = (DBT *)lzo_decompress(cdata->data, cdata->size);
-#else
-           data = (DBT *)clz_decompress(cdata->data, cdata->size);
-#endif
-           DBTfree(cdata);
-           memcpy(blockdata, data->data, data->size);
-           ret = data->size;
-           DBTfree(data);
-           release_compress_lock();
-        //} else {
-        //   memcpy(blockdata, cdata->data, cdata->size);
-        //   ret = cdata->size;
-        //   DBTfree(cdata);
-        //}
+        compress_lock();
+        data = lfsdecompress(cdata);
+        memcpy(blockdata, data->data, data->size);
+        ret=data->size;
+        release_compress_lock();
         release_group_lock();
+        DBTfree(data);
+        DBTfree(cdata);
 // When we read a block < BLKSIZE there it is likely that we need
 // to read it again so it makes sense to put it in a cache.
         if ( size < BLKSIZE ) {
@@ -1931,11 +1972,79 @@ int fs_mkdir(const char *path, mode_t mode)
     return (res);
 }
 
+DBT *tc_compress(unsigned char *dbdata, unsigned long dsize)
+{
+  DBT *compressed;
+  int rsize;
+  char *data;
+
+  compressed=s_malloc(sizeof(DBT));
+  switch (config->compression)
+  {
+  case 'G':
+    data=tcgzipencode((const char*)dbdata, dsize, &rsize);
+    compressed->data=s_malloc(rsize+1);
+    compressed->data[0]='G';
+    break;
+  case 'B':
+    data=tcbzipencode((const char*)dbdata, dsize, &rsize);
+    compressed->data=s_malloc(rsize+1);
+    compressed->data[0]='B';
+    break;
+  case 'D':
+    data=tcdeflate((const char*)dbdata, dsize, &rsize);
+    compressed->data=s_malloc(rsize+1);
+    compressed->data[0]='D';
+    break;
+  default:
+    compressed->data=s_malloc(dsize+1);
+    memcpy(&compressed->data[1],dbdata,dsize);
+    compressed->data[0]=0;
+    compressed->size=dsize+1;
+    return compressed;
+  }
+  memcpy(&compressed->data[1],data,rsize);
+  compressed->size=rsize+1;
+  free(data);
+  return compressed;
+}
+
+DBT *lfscompress(unsigned char *dbdata, unsigned long dsize) 
+{
+  DBT *compressed=NULL;
+#ifdef ENABLE_CRYPTO
+    DBT *encrypted;
+#endif
+
+  switch (config->compression)
+  {
+  case 'L':
+#ifdef LZO
+    compressed = (DBT *)lzo_compress(dbdata, dsize);
+#endif
+    break;
+  case 'Q':
+    compressed = (DBT *)clz_compress(dbdata, dsize);
+    break;
+  default:
+    compressed=(DBT *)tc_compress(dbdata, dsize);
+  }
+  
+#ifdef ENABLE_CRYPTO
+  if (config->encryptdata) {
+     encrypted = encrypt(compressed->data, compressed->size);
+     DBTfree(compressed);
+     return encrypted;
+  }
+#endif
+  return compressed;
+} 
+
 unsigned int db_commit_block(unsigned char *dbdata,
                              INOBNO inobno,unsigned long dsize)
 {
     unsigned char *stiger=NULL;
-    compr *compressed;
+    DBT *compressed;
     unsigned long long inuse;
     unsigned int ret = 0;
 
@@ -1945,14 +2054,10 @@ unsigned int db_commit_block(unsigned char *dbdata,
     inuse = getInUse(stiger);
     if (0 == inuse) {
        compress_lock();
-#ifdef LZO
-       compressed = lzo_compress((unsigned char *) dbdata, dsize);
-#else
-       compressed = clz_compress((unsigned char *) dbdata, dsize);
-#endif
+       compressed=lfscompress((unsigned char *) dbdata, dsize);
        ret = compressed->size;
        bin_write_dbdata(dbdta,stiger,config->hashlen,compressed->data,compressed->size);
-       comprfree(compressed);
+       DBTfree(compressed);
        release_compress_lock();
     } else {
         loghash("commit_block : only updated inuse for hash ", stiger);
@@ -1970,10 +2075,12 @@ void partial_truncate_block(struct stat *stbuf, unsigned long long blocknr,
                             unsigned int offset)
 {
     unsigned char *blockdata;
-    compr *uncompdata;
+    DBT *uncompdata;
     INOBNO inobno;
     DBT *data;
+#ifdef ENABLE_CRYPTO
     DBT *encrypted;
+#endif
     unsigned char *stiger;
     unsigned long long inuse;
     int ecode;
@@ -2028,17 +2135,13 @@ void partial_truncate_block(struct stat *stbuf, unsigned long long blocknr,
     release_group_lock();
     blockdata = s_zmalloc(BLKSIZE);
     compress_lock();
-#ifdef LZO
-    uncompdata = lzo_decompress(data->data, data->size);
-#else
-    uncompdata = clz_decompress(data->data, data->size);
-#endif
+    uncompdata = lfsdecompress(data);
     if ( uncompdata->size >= offset ) {
        memcpy(blockdata, uncompdata->data, offset);
     } else {
        memcpy(blockdata, uncompdata->data, uncompdata->size);
     }
-    comprfree(uncompdata);
+    DBTfree(uncompdata);
     release_compress_lock();
     db_commit_block(blockdata,inobno,offset);
     free(stiger);
@@ -2863,6 +2966,17 @@ void parseconfig(int mklessfs)
     config->hashlen = 24;
     config->hash="MHASH_TIGER192";
     config->selected_hash = MHASH_TIGER192;
+    iv = getenv("COMPRESSION");
+    config->compression='Q';
+    if ( NULL != iv ) {
+      if ( 0 == strcasecmp("qlz",iv)) config->compression='Q';
+      if ( 0 == strcasecmp("lzo",iv)) config->compression='L';
+      if ( 0 == strcasecmp("gzip",iv)) config->compression='G';
+      if ( 0 == strcasecmp("bzip",iv)) config->compression='B';
+      if ( 0 == strcasecmp("deflate",iv)) config->compression='D';
+      if ( 0 == strcasecmp("disabled",iv)) config->compression=0;
+      if ( 0 == strcasecmp("none",iv)) config->compression=0;
+    }
     iv = getenv("HASHNAME");
     if ( NULL != iv ) {
        config->hash=iv;
@@ -2976,13 +3090,13 @@ void parseconfig(int mklessfs)
             }
         }
         if (config->encryptdata) {
-            if (config->encryptdata) {
+            /*if (config->encryptdata) {
                 if (NULL == config->blockdatabs) {
                     fprintf(stderr,"Encryption is not supported with file_io\n");
                     die_dataerr
                         ("Encryption is not supported with file_io");
                 }
-            }
+            }*/
             if ( NULL == getenv("PASSWORD")){
                config->passwd =
                    (unsigned char *) s_strdup(getpass("Password: "));
@@ -3349,18 +3463,12 @@ void update_meta(unsigned long long inode, unsigned long size, int sign)
 void tc_write_cache(CCACHEDTA *ccachedta, INOBNO *inobno) 
 {
    unsigned long long inuse;
-   compr *compressed;
+   DBT *compressed;
 
    inuse = getInUse((unsigned char *)&ccachedta->hash);
    if (inuse == 0) {
       compress_lock();
-#ifdef LZO
-      compressed =
-            lzo_compress(ccachedta->data, ccachedta->datasize);
-#else
-      compressed =
-            clz_compress(ccachedta->data, ccachedta->datasize);
-#endif
+      compressed=lfscompress(ccachedta->data, ccachedta->datasize);
       bin_write_dbdata(dbdta,&ccachedta->hash,config->hashlen,compressed->data,compressed->size);
       if ( ccachedta->newblock == 1 ) update_meta(inobno->inode,compressed->size,1);
       if ( ccachedta->updated != 0 ) {
@@ -3370,7 +3478,7 @@ void tc_write_cache(CCACHEDTA *ccachedta, INOBNO *inobno)
             update_meta(inobno->inode,ccachedta->updated-compressed->size,0);
          }
       }
-      comprfree(compressed);
+      DBTfree(compressed);
       release_compress_lock();
    }
    bin_write_dbdata(dbb,(char *)inobno,sizeof(INOBNO),ccachedta->hash,config->hashlen);
@@ -3449,6 +3557,8 @@ void end_flush_commit() {
    }else tchdbsync(dbdta);
    tchdbsync(dbu);
    tchdbsync(dbb);
+   free(config->lfsstats);
+   config->lfsstats=lessfs_stats();
    if ( config->transactions ) {
       if ( config->blockdatabs != NULL ){
           tchdbtranbegin(dbdta);
@@ -3462,3 +3572,53 @@ void end_flush_commit() {
    }
 }
 
+
+char *lessfs_stats()
+{
+    char *lfsmsg;
+    char *msg2;
+    char *line;
+    char *key;
+    int ksize;
+    DDSTAT *ddstat;
+    DBT *data;
+    unsigned long long inode;
+    char *nfi = "NFI";
+    CRYPTO *crypto;
+
+    lfsmsg=as_sprintf("INODE       SIZE            COMPRESSED_SIZE       FILENAME\n");
+    /* traverse records */
+    tchdbiterinit(dbp);
+    while ((key = tchdbiternext(dbp, &ksize)) != NULL) {
+        if (0 != memcmp(key, nfi, 3)) {
+            memcpy(&inode, key, sizeof(unsigned long long));
+            data = search_dbdata(dbp, &inode, sizeof(unsigned long long));
+            if (inode == 0) {
+                crypto = (CRYPTO *) data->data;
+            } else {
+                ddstat = value_to_ddstat(data);
+                if (S_ISREG(ddstat->stbuf.st_mode)) {
+#ifdef x86_64
+                   line=as_sprintf
+                       ("%lu            %lu             %llu            %s\n",
+                        ddstat->stbuf.st_ino, ddstat->stbuf.st_size,
+                        ddstat->real_size, ddstat->filename);
+#else
+                   line=as_sprintf
+                       ("%llu           %llu            %llu            %s\n",
+                        ddstat->stbuf.st_ino, ddstat->stbuf.st_size,
+                        ddstat->real_size, ddstat->filename);
+#endif
+                   msg2=lfsmsg;
+                   lfsmsg=as_strcat(msg2,line);
+                   free(msg2);
+                   free(line);
+                }
+                ddstatfree(ddstat);
+            }
+            DBTfree(data);
+        }
+        free(key);
+    }
+    return lfsmsg;
+}

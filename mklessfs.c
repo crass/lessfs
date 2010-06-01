@@ -138,12 +138,12 @@ int main(int argc, char *argv[])
     if (NULL != p) {
         if (0 == strcasecmp(p, "ON"))
             config->encryptdata = 1;
-        if (config->encryptdata) {
+        /*if (config->encryptdata) {
             if (NULL == config->blockdatabs) {
                 fprintf(stderr,"Encryption is not supported with file_io\n");
                 die_dataerr("Encryption is not supported with file_io");
             }
-        }
+        }*/
     }
 #endif
     config->encryptmeta = 1;

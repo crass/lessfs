@@ -2,8 +2,8 @@
 umount /fuse
 rm /core.*
 rm /core
-rm -rf /data/mta
-rm -rf /data/dta
+rm -rf /data/mta/*
+rm -rf /data/dta/*
 logrotate -f /etc/logrotate.conf
 ./mklessfs -f -c /etc/lessfs.cfg
 # Use the new lessfs.cfg syntax and let lessfs worry about the rest.

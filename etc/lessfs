@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# lessfs This script starts and stops the spamd daemon
+# lessfs This script starts and stops lessfs
 #
 # chkconfig: - 78 30
 # processname: lessfs

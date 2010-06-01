@@ -30,8 +30,8 @@ typedef struct {
 } FLIST;
 
 INUSE *file_get_inuse(unsigned char *);
-unsigned int file_commit_block(unsigned char *, unsigned char *, INOBNO,
-                               bool);
+unsigned int file_commit_block(unsigned char *,INOBNO,
+                               unsigned long);
 void file_sync_flush_dtaq();
 void file_partial_truncate_block(struct stat *, unsigned long long,
                                  unsigned int);

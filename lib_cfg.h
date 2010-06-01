@@ -39,6 +39,8 @@ struct configdata {
     char *nexthash;
     char *commithash;
     char *hash;
+    char *lfsstats;
+    unsigned char compression;
     unsigned char *iv;
     unsigned char *passwd;
     unsigned long long cachesize;

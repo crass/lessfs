@@ -110,59 +110,6 @@ void libSafeExit()
     exit(EXIT_OK);
 }
 
-char *lessfs_stats()
-{
-    char *lfsmsg;
-    char *msg2;
-    char *line;
-    unsigned long long nextinode;
-    unsigned long long count=5;
-    char *key, *value;
-    int vsize;
-    int ksize;
-    DDSTAT *ddstat;
-    DBT *data;
-    unsigned long long inode;
-    char *nfi = "NFI";
-    CRYPTO *crypto;
-
-    lfsmsg=as_sprintf("INODE       SIZE            COMPRESSED_SIZE       FILENAME\n");
-    /* traverse records */
-    tchdbiterinit(dbp);
-    while ((key = tchdbiternext(dbp, &ksize)) != NULL) {
-        if (0 != memcmp(key, nfi, 3)) {
-            memcpy(&inode, key, sizeof(unsigned long long));
-            data = search_dbdata(dbp, &inode, sizeof(unsigned long long));
-            if (inode == 0) {
-                crypto = (CRYPTO *) data->data;
-            } else {
-                ddstat = value_to_ddstat(data);
-                if (S_ISREG(ddstat->stbuf.st_mode)) {
-#ifdef x86_64
-                   line=as_sprintf
-                       ("%lu            %lu             %llu            %s\n",
-                        ddstat->stbuf.st_ino, ddstat->stbuf.st_size,
-                        ddstat->real_size, ddstat->filename);
-#else
-                   line=as_sprintf
-                       ("%llu           %llu            %llu            %s\n",
-                        ddstat->stbuf.st_ino, ddstat->stbuf.st_size,
-                        ddstat->real_size, ddstat->filename);
-#endif
-                   msg2=lfsmsg;
-                   lfsmsg=as_strcat(msg2,line);
-                   free(msg2);
-                   free(line);
-                }
-                ddstatfree(ddstat);
-            }
-            DBTfree(data);
-        }
-        free(key);
-    }
-    return lfsmsg;
-}
-
 int check_path_sanity(const char *path)
 {
     char *name;
@@ -212,7 +159,6 @@ void dbsync()
 static int lessfs_getattr(const char *path, struct stat *stbuf)
 {
     int res;
-    char *lfsmsg; 
 
     FUNC;
     LDEBUG("lessfs_getattr %s", path);
@@ -225,9 +171,7 @@ static int lessfs_getattr(const char *path, struct stat *stbuf)
     LDEBUG("lessfs_getattr : %s size %llu : result %i",path,
            (unsigned long long) stbuf->st_size, res);
     if ( 0 == strcmp("/.lessfs/lessfs_stats",path)){
-       lfsmsg=lessfs_stats();
-       stbuf->st_size=strlen(lfsmsg);
-       free(lfsmsg);
+       stbuf->st_size=strlen(config->lfsstats);
     }
     release_global_lock();
     return (res);
@@ -649,16 +593,6 @@ static int lessfs_open(const char *path, struct fuse_file_info *fi)
     return (res);
 }
 
-void write_lessfs_stats(char *buf, size_t size, off_t offset)
-{
-    char *lfsmsg;
-    memset(buf,0,size);
-    lfsmsg=lessfs_stats();
-    memcpy(buf,lfsmsg+offset,size);
-    free(lfsmsg);
-    return;
-}
-
 static int lessfs_read(const char *path, char *buf, size_t size,
                        off_t offset, struct fuse_file_info *fi)
 {
@@ -672,14 +606,14 @@ static int lessfs_read(const char *path, char *buf, size_t size,
     FUNC;
 
     get_global_lock();
+    memset(buf, 0, size);
     if ( fi->fh == 7 ) {
-       write_lessfs_stats(buf,size,offset);
+       memcpy(buf,&config->lfsstats[offset],size);
        release_global_lock();
        return(size);
     }
 // Change this to creating a buffer that is allocated once.
     tmpbuf = s_zmalloc(BLKSIZE + 1);
-    memset(buf, 0, size);
     LDEBUG("lessfs_read called offset : %llu, size bytes %llu",
            (unsigned long long) offset, (unsigned long long) size);
     while (done < size) {
@@ -725,8 +659,7 @@ CCACHEDTA *update_stored(unsigned char *hash, INOBNO *inobno, off_t offsetblock)
 {
    DBT *encrypted;
    DBT *data;
-   unsigned char *dbdata;
-   compr *uncompdata;
+   DBT *uncompdata;
    CCACHEDTA *ccachedta;
    unsigned long long inuse;
 
@@ -737,45 +670,18 @@ CCACHEDTA *update_stored(unsigned char *hash, INOBNO *inobno, off_t offsetblock)
    ccachedta->newblock=0;
 
    group_lock();
-#ifdef ENABLE_CRYPTO
-   encrypted = search_dbdata(dbdta, hash, config->hashlen);
-   if (NULL == encrypted) {
-#else
    data = search_dbdata(dbdta, hash, config->hashlen);
    if (NULL == data) {
-#endif
-
-#ifndef ENABLE_CRYPTO
+      die_dataerr("Unable to find hash to update");
    }
-#else
-   } else {
-      if (config->encryptdata) {
-         data = decrypt(encrypted);
-         DBTfree(encrypted);
-      } else
-         data = encrypted;
-   }
-#endif
-//   if (data->size < BLKSIZE) {
-      compress_lock();
-#ifdef LZO
-      uncompdata = lzo_decompress(data->data, data->size);
-#else
-      LDEBUG("uncomp data");
-      uncompdata = clz_decompress(data->data, data->size);
-      LDEBUG("done uncomp data");
-#endif
-      LDEBUG("got uncompsize : %lu", uncompdata->size);
-      memcpy(&ccachedta->data, uncompdata->data, uncompdata->size);
-      ccachedta->datasize=uncompdata->size;
-      ccachedta->updated=data->size;
-      comprfree(uncompdata);
-      release_compress_lock();
-//   } else {
-//      LDEBUG("Got data->size %lu", data->size);
-//      memcpy(&ccachedta->data, data->data, data->size);
-//      ccachedta->datasize=data->size;
-//   }
+   compress_lock();
+   uncompdata=lfsdecompress(data);
+   LDEBUG("got uncompsize : %lu", uncompdata->size);
+   memcpy(&ccachedta->data, uncompdata->data, uncompdata->size);
+   ccachedta->datasize=uncompdata->size;
+   ccachedta->updated=data->size;
+   DBTfree(uncompdata);
+   release_compress_lock();
    DBTfree(data);
    delete_dbb(inobno);
    inuse = getInUse(hash);
@@ -962,7 +868,6 @@ static int lessfs_release(const char *path, struct fuse_file_info *fi)
 static int lessfs_fsync(const char *path, int isdatasync,
                         struct fuse_file_info *fi)
 {
-    DBT *data;
     FUNC;
     (void) path;
     (void) isdatasync;
@@ -1495,6 +1400,8 @@ static void *lessfs_init()
     struct tm * timeinfo=NULL;
     time_t tdate;
 
+    config->lfsstats=lessfs_stats(); 
+    LFATAL("%s",config->lfsstats);
 #ifdef LZO
     initlzo();
 #endif

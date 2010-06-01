@@ -185,3 +185,7 @@ void cook_cache(char *, int, CCACHEDTA *, int);
 void start_flush_commit();
 void end_flush_commit();
 int wait_pending();
+DBT *lfsdecompress(DBT *);
+DBT *lfscompress(unsigned char *, unsigned long);
+void update_meta(unsigned long long , unsigned long , int );
+char *lessfs_stats();

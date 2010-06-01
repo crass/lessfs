@@ -213,7 +213,7 @@
    slash. */
 #undef LSTAT_FOLLOWS_SLASHED_SYMLINK
 
-/* Define if you want LZO compression */
+/* Define if you want to enable LZO compression */
 #undef LZO
 
 /* Define to 1 if your C compiler doesn't accept -c and -o together. */

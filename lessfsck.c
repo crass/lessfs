@@ -238,7 +238,7 @@ void check_inode_structure(DDSTAT *ddstat)
    }
    real_size=BLKSIZE * inobno.blocknr;
    if ( found  && real_size>ddstat->stbuf.st_size+BLKSIZE ) {
-     printf("inode %llu size %llu mismatch, restore size to %llu bytes\n",ddstat->stbuf.st_ino,ddstat->stbuf.st_size,real_size);
+     printf("inode %llu size %llu mismatch, restore size to %llu bytes\n",(unsigned long long)ddstat->stbuf.st_ino,(unsigned long long)ddstat->stbuf.st_size,real_size);
      ddstat->stbuf.st_size=real_size;
      ddbuf = create_ddbuf(ddstat->stbuf, ddstat->filename, ddstat->real_size); 
      bin_write_dbdata(dbp, &inobno.inode,
@@ -282,7 +282,7 @@ void file_check_inode_structure(DDSTAT *ddstat)
    }
    real_size=BLKSIZE * inobno.blocknr;
    if ( found  && real_size>ddstat->stbuf.st_size+BLKSIZE ) {
-     printf("inode %llu size %llu mismatch, restore size to %llu bytes\n",ddstat->stbuf.st_ino,ddstat->stbuf.st_size,real_size);
+     printf("inode %llu size %llu mismatch, restore size to %llu bytes\n",(unsigned long long)ddstat->stbuf.st_ino,(unsigned long long)ddstat->stbuf.st_size,real_size);
      ddstat->stbuf.st_size=real_size;
      ddbuf = create_ddbuf(ddstat->stbuf, ddstat->filename, real_size);
      bin_write_dbdata(dbp, &inobno.inode,
@@ -326,7 +326,7 @@ int relink_symlink(DDSTAT *ddstat)
     int ret=1;
     DBT *data;
 
-    printf("Moving orphaned symlink inode %llu to lost_found\n",ddstat->stbuf.st_ino);
+    printf("Moving orphaned symlink inode %llu to lost_found\n",(unsigned long long)ddstat->stbuf.st_ino);
     /* traverse records */
     data=search_dbdata(dbs,&ddstat->stbuf.st_ino,sizeof(unsigned long long));
     if ( NULL != data ) {
@@ -480,7 +480,7 @@ void check_inodes()
                       }    
                    }
                 } else {
-                   printf("Deleting corrupted inode %llu\n",ddstat->stbuf.st_ino);
+                   printf("Deleting corrupted inode %llu\n",(unsigned long long)ddstat->stbuf.st_ino);
                    search_and_delete_dbdirent(ddstat);
                    delete_key(dbp, key, ksize);
                 }
