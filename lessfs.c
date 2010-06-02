@@ -253,14 +253,12 @@ static int lessfs_unlink(const char *path)
 // /.lessfs_stats can not be deleted
     if ( 0 == strcmp(path,"/.lessfs/lessfs_stats")) return(0);
     get_global_lock();
-    write_lock();
     if (NULL != config->blockdatabs) {
         res = db_unlink_file(path);
     } else {
         res = file_unlink_file(path);
     }
     if ( config->relax == 0 ) dbsync();
-    release_write_lock();
     release_global_lock();
     EFUNC;
     return res;
@@ -569,6 +567,7 @@ static int lessfs_open(const char *path, struct fuse_file_info *fi)
             memddstat->stbuf.st_atim.tv_nsec=0;
             LDEBUG("lessfs_open : initial open memddstat->opened = %u",
                    memddstat->opened);
+            LDEBUG("memddstat->stbuf.st_atim.tv_sec = %lu",memddstat->stbuf.st_atim.tv_sec);
             ddbuf = create_mem_ddbuf(memddstat);
             tctreeput(metatree, &inode, sizeof(unsigned long long),
                               (void *) ddbuf->data, ddbuf->size);
@@ -579,8 +578,8 @@ static int lessfs_open(const char *path, struct fuse_file_info *fi)
             memddstat->opened++;
             memddstat->stbuf.st_atim.tv_sec=time(NULL);
             memddstat->stbuf.st_atim.tv_nsec=0;
-            LDEBUG("lessfs_open : repeated open ddstat->opened = %u",
-                   memddstat->opened);
+            LFATAL("lessfs_open : repeated open ddstat->opened = %u %lu",
+                   memddstat->opened,memddstat->stbuf.st_atim.tv_sec);
             ddbuf = create_mem_ddbuf(memddstat);
             tctreeput(metatree, &inode, sizeof(unsigned long long),
                               (void *) ddbuf->data, ddbuf->size);
@@ -833,6 +832,8 @@ static int lessfs_release(const char *path, struct fuse_file_info *fi)
     MEMDDSTAT *memddstat;
     DBT *ddbuf;
 
+    struct stat stbuf;
+
     FUNC;
 // Finish pending i/o for this inode.
     get_global_lock();
@@ -844,9 +845,10 @@ static int lessfs_release(const char *path, struct fuse_file_info *fi)
         memddstat = (MEMDDSTAT *) dataptr;
         if (memddstat->opened == 1) {
 // Update the filesize when needed.
+            LFATAL("lessfs_release : memddstat->stbuf.st_atim.tv_sec = %lu opened=%u",memddstat->stbuf.st_atim.tv_sec, memddstat->opened);
             update_filesize_onclose(fi->fh);
-            LDEBUG("lessfs_release : Delete cache for %llu", fi->fh);
             tctreeout(metatree, &fi->fh, sizeof(unsigned long long));
+            LDEBUG("lessfs_release : Delete cache for %llu", fi->fh);
             if ( NULL == config->blockdatabs) fdatasync(fdbdta);
         } else {
             memddstat->opened--;
@@ -855,12 +857,14 @@ static int lessfs_release(const char *path, struct fuse_file_info *fi)
                    memddstat->opened);
             tctreeput(metatree, &fi->fh, sizeof(unsigned long long),
                               (void *) ddbuf->data, ddbuf->size);
+            LFATAL("memddstat->stbuf.st_atim.tv_sec = %lu",memddstat->stbuf.st_atim.tv_sec);
             DBTfree(ddbuf);
         }
     }
     (void) path;
     (void) fi;
     release_global_lock();
+    LFATAL("/lessfs_release");
     EFUNC;
     return 0;
 }

@@ -664,7 +664,7 @@ DDSTAT *value_to_ddstat(DBT * vddstat)
     if (1 == filelen) {
         memset(&ddbuf->filename, 0, MAX_POSIX_FILENAME_LEN);
     } else {
-        memcpy(ddbuf->filename, decrypted->data + (sizeof(struct stat)+sizeof(unsigned long long)),
+        memcpy(ddbuf->filename, &decrypted->data[(sizeof(struct stat)+sizeof(unsigned long long))],
                filelen + 1);
     }
     LDEBUG("value_to_ddstat : return %llu", ddbuf->stbuf.st_ino);
@@ -915,8 +915,8 @@ int get_realsize_fromcache(unsigned long long inode, struct stat *stbuf)
     result++;
     mddstat = (MEMDDSTAT *) data;
     memcpy(stbuf, &mddstat->stbuf, sizeof(struct stat));
-    LDEBUG("get_realsize_fromcache : return stbuf from cache : size %llu",
-           stbuf->st_size);
+    LDEBUG("get_realsize_fromcache : return stbuf from cache : size %llu time %lu",
+           stbuf->st_size,mddstat->stbuf.st_atim.tv_sec);
     return (result);
 }
 
@@ -1411,14 +1411,14 @@ MEMDDSTAT *inode_meta_from_cache(unsigned long long inode)
     const char *dataptr;
     int vsize;
 
-    MEMDDSTAT *ddstat = NULL;
+    MEMDDSTAT *memddstat = NULL;
     dataptr = tctreeget(metatree, &inode, sizeof(unsigned long long), &vsize);
     if (dataptr == NULL) {
         LDEBUG("inode %llu not found to update.", inode);
         return NULL;
     }
-    ddstat = value_tomem_ddstat((char *) dataptr, vsize);
-    return ddstat;
+    memddstat = value_tomem_ddstat((char *) dataptr, vsize);
+    return memddstat;
 }
 
 void update_filesize_onclose(unsigned long long inode)
@@ -1427,7 +1427,7 @@ void update_filesize_onclose(unsigned long long inode)
 
     memddstat = inode_meta_from_cache(inode);
     if (NULL == memddstat) {
-        LDEBUG("inode %llu not found to update.", inode);
+        LFATAL("inode %llu not found to update.", inode);
         return;
     }
     hash_update_filesize(memddstat, inode);
@@ -1441,19 +1441,11 @@ int update_filesize_cache(struct stat *stbuf, off_t size)
     DBT *dskdata;
     int vsize;
     MEMDDSTAT *memddstat;
-    DDSTAT *ddstat;
+    DDSTAT *ddstat=NULL;
     DBT *ddbuf;
     time_t thetime;
 
     thetime = time(NULL);
-    // Truncate filesize.
-    dskdata = search_dbdata(dbp, &stbuf->st_ino, sizeof(unsigned long long));
-    if (NULL == dskdata) {
-        LDEBUG("update_filesize_cache : inode not found");
-        return (-ENOENT);
-    }
-    ddstat = value_to_ddstat(dskdata);
-    DBTfree(dskdata);
     data = tctreeget(metatree, &stbuf->st_ino,
                           sizeof(unsigned long long), &vsize);
     if (NULL != data) {
@@ -1474,7 +1466,7 @@ int update_filesize_cache(struct stat *stbuf, off_t size)
         ddstatfree(ddstat);
         dskdata =
             search_dbdata(dbp, &stbuf->st_ino, sizeof(unsigned long long));
-        if (NULL == data) {
+        if (NULL == dskdata) {
             return (-ENOENT);
         }
         ddstat = value_to_ddstat(dskdata);
@@ -1591,14 +1583,14 @@ void update_filesize(unsigned long long inode, unsigned long long fsize,
     return;
 }
 
-void hash_update_filesize(MEMDDSTAT * ddstat, unsigned long long inode)
+void hash_update_filesize(MEMDDSTAT * memddstat, unsigned long long inode)
 {
     DBT *ddbuf;
 // Wait until the data queue is written before we update the filesize
-    if (ddstat->stbuf.st_nlink > 1) {
-        ddbuf = create_ddbuf(ddstat->stbuf, NULL, ddstat->real_size);
+    if (memddstat->stbuf.st_nlink > 1) {
+        ddbuf = create_ddbuf(memddstat->stbuf, NULL, memddstat->real_size);
     } else {
-        ddbuf = create_ddbuf(ddstat->stbuf, ddstat->filename, ddstat->real_size);
+        ddbuf = create_ddbuf(memddstat->stbuf, memddstat->filename, memddstat->real_size);
     }
     bin_write_dbdata(dbp, &inode,
                      sizeof(unsigned long long), (void *) ddbuf->data,
@@ -1796,6 +1788,7 @@ int db_unlink_file(const char *path)
         return (res);
     inode = st.st_ino;
     flush_abort(inode);
+    write_lock();
     while (wait_pending()) {
        flush_wait(st.st_ino);
        release_write_lock();
@@ -1816,44 +1809,9 @@ int db_unlink_file(const char *path)
     }
     inobno.inode = inode;
     inobno.blocknr = st.st_size/BLKSIZE;
-    if ( inobno.blocknr * BLKSIZE  < st.st_size ) inobno.blocknr++;
-
+    if ( inobno.blocknr * BLKSIZE  < st.st_size ) inobno.blocknr=1+st.st_size/BLKSIZE;
 // Start deleting the actual data blocks.
-    while (1) {
-        bdata = search_dbdata(dbb, &inobno, sizeof(INOBNO));
-        if (bdata == NULL) {
-            if ( inobno.blocknr == 0 ) break;
-            inobno.blocknr--;
-            continue;
-        }
-        stiger = s_malloc(bdata->size);
-        memcpy(stiger, bdata->data, bdata->size);
-        loghash("search inuse for ", stiger);
-        group_lock();
-        inuse = getInUse(stiger);
-        LDEBUG("inuse=%llu", inuse);
-        if (haslinks == 1) {
-            if (inuse == 1) {
-                loghash("unlink_file delete dbu,dbdta for ", stiger);
-                delete_inuse(stiger);
-                delete_key(dbdta, stiger, config->hashlen);
-            } else {
-                if (inuse > 1)
-                    inuse--;
-                update_inuse(stiger, inuse);
-            }
-        }
-        release_group_lock();
-        free(stiger);
-        DBTfree(bdata);
-        if (haslinks == 1) {
-            LDEBUG("unlink_file : delete inode %llu - %llu", inobno.inode,
-                   inobno.blocknr);
-            delete_dbb(&inobno);
-        }
-        if ( inobno.blocknr == 0 ) break;
-        inobno.blocknr--;
-    }
+    db_fs_truncate(&st, 0, bname);
     if (haslinks == 1) {
         if (0 !=
             (res =
@@ -1900,9 +1858,6 @@ int db_unlink_file(const char *path)
                                          NULL, 0);
             memcpy(&ddstat->filename, filename, strlen(filename) + 1);
             free(filename);
-            LDEBUG
-                ("unlink_file : Restore %s to regular file settings and clean up.",
-                 ddstat->filename);
             btdelete_curkey(dbl, &dinoino, sizeof(DINOINO),
                             ddstat->filename, strlen(ddstat->filename));
             btdelete_curkey(dbl, &ddstat->stbuf.st_ino,
@@ -1929,6 +1884,7 @@ int db_unlink_file(const char *path)
         DBTfree(ddbuf);
         ddstatfree(ddstat);
     }
+    release_write_lock();
     free(bname);
     free(dname);
     EFUNC;
@@ -2179,9 +2135,6 @@ int db_fs_truncate(struct stat *stbuf, off_t size, char *bname)
     while (lastblocknr >= blocknr) {
         fromcache=0;
         if ( offsetblock != 0 && lastblocknr == blocknr ) break;
-        LDEBUG
-            ("lessfs_truncate : Enter loop lastblocknr %llu : blocknr %llu",
-             lastblocknr, blocknr);
         inobno.blocknr = lastblocknr;
         data = search_dbdata(dbb, &inobno, sizeof(INOBNO));
         if (NULL == data) {
@@ -2879,12 +2832,28 @@ int fs_rename(const char *from, const char *to, struct stat stbuf)
 int update_stat(char *path, struct stat *stbuf)
 {
     DDSTAT *ddstat;
+    MEMDDSTAT *memddstat;
     DBT *ddbuf;
     DBT *dataptr;
+    const char *cdata;
+    int vsize;
     unsigned long long inode;
 
     FUNC;
     inode = stbuf->st_ino;
+
+
+    cdata = tctreeget(metatree, (unsigned char *)&inode,
+                           sizeof(unsigned long long), &vsize);
+    if ( NULL != cdata ) {
+       memddstat = (MEMDDSTAT *) cdata;
+       memcpy(&memddstat->stbuf, stbuf, sizeof(struct stat));
+       ddbuf = create_mem_ddbuf(memddstat);
+       tctreeput(metatree, &inode, sizeof(unsigned long long),
+                              (void *) ddbuf->data, ddbuf->size);
+       DBTfree(ddbuf);
+       return(0);
+    }
     dataptr = search_dbdata(dbp, &inode, sizeof(unsigned long long));
     if (dataptr == NULL) {
         return (-ENOENT);
@@ -3323,6 +3292,7 @@ reflush:
           }
        }
     }
+    LDEBUG("/flush_abort");
     return;
 }
 
@@ -3337,6 +3307,7 @@ int wait_pending()
   INOBNO *inobno;
   CCACHEDTA *ccachedta;
 
+  FUNC;
   tctreeiterinit(rdtree);
   while ( NULL != (key=(char *)tctreeiternext(rdtree, &size))){
      val=(char *)tctreeget(rdtree, (void *)key, size, &vsize);
@@ -3347,6 +3318,7 @@ int wait_pending()
         if ( ccachedta->pending == 1 ) pending=1;
      }
   }
+  EFUNC;
   return pending;
 }
 
@@ -3445,9 +3417,10 @@ void update_meta(unsigned long long inode, unsigned long size, int sign)
    int vsize;
    MEMDDSTAT *mddstat;
 
+   LDEBUG("update_meta : inode %llu database.", inode);
    data = tctreeget(metatree, &inode, sizeof(unsigned long long), &vsize);
    if (data == NULL) {
-       LDEBUG("inode %llu not found use size from database.", inode);
+       LFATAL("inode %llu not found use size from database.", inode);
        return;
    }
    mddstat = (MEMDDSTAT *) data;

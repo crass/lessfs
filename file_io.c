@@ -630,6 +630,8 @@ int file_unlink_file(const char *path)
     if ( inobno.blocknr * BLKSIZE  < st.st_size ) inobno.blocknr++;
 
 // Start deleting the actual data blocks.
+    (void)file_fs_truncate(&st, 0, bname);
+/*
     while (1) {
         bdata = search_dbdata(dbb, &inobno, sizeof(INOBNO));
         if (bdata == NULL) {
@@ -667,7 +669,7 @@ int file_unlink_file(const char *path)
         }
         if ( inobno.blocknr == 0 ) break;
         inobno.blocknr--;
-    }
+    }*/
     if (haslinks == 1) {
         if (0 !=
             (res =

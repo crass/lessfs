@@ -53,7 +53,7 @@ typedef struct {
 typedef struct {
     struct stat stbuf;
     unsigned long long real_size;
-    char filename[MAX_POSIX_FILENAME_LEN];
+    char filename[MAX_POSIX_FILENAME_LEN+1];
 } DDSTAT;
 
 typedef struct {

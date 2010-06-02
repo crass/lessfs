@@ -3,7 +3,7 @@
 .\" You may contact the author by:
 .\" e-mail: mruijter@gmail.com
 .\"
-.TH lessfs 1 .\" "Lessfs reference" v1.0.8 "2010"
+.TH lessfs 1 .\" "Lessfs reference" v1.1.0-alpha1 "2010"
 .SH NAME
 lessfs - An inline data deduplicating filesystem
 .SH SYNTAX
@@ -12,9 +12,14 @@ lessfs - An inline data deduplicating filesystem
 [\fB-o\fR big_writes,max_read=nnnn,max_write=nnnn]
 .fi
 .SH VERSION
-This man page documents lessfs version 1.0.8
+This man page documents lessfs version 1.1.0-alpha1
 .SH DESCRIPTION
-\fBlessfs\fR is a filesystem that performs inline data deduplication. lessfs uses the 192-bit (24-byte) tiger hash algorithm to compare the data. The filesystem compresses the unique data blocks with LZO or QUICKLZ compression before writing them to disk.
+\fBlessfs\fR is a filesystem that performs inline data deduplication. lessfs uses the 192-bit (24-byte) tiger hash algorithm by default to compare the data. The filesystem compresses the unique data blocks before writing them to disk. 
+.br
+Lessfs supports a large number of compression protocols. See COMPRESSION for details.
+.br 
+Lessfs 1.1 also supports a wide range of hashes to choose from with hash lenghts ranging from 192 to 512 bit. See HASHNAME for details.
+\FB\
 .PP
 .SS OPTIONS
 .IP "big_writes"
@@ -164,6 +169,10 @@ Valid options are : on (default) or off
 Enable or disable transactions. Without transactions enabled lessfs will need to be repaired with fsck after a crash. The downside of enabling transactions is a mild performance impact.
 .br
 Valid options are : off (default) or on
+.IP COMPRESSION=qlz
+Valid options are disabled or none, qlz,lzo,gzip,bzip and deflate
+.IP HASHNAME=TIGER192
+Lessfs supports the following hashes: MHASH_SHA256, MHASH_SHA512, MHASH_WHIRLPOOL, MHASH_HAVAL256, MHASH_SNEFRU256, MHASH_RIPEMD256 and TIGER192. The tiger hash is used by default. The hash lenght can be anything between 24 and 64 bytes. Unlike the compression protocol, the hash and hash lenght can not be changed after formatting the filesystem.
 .IP BLKSIZE=131072
 When BLKSIZE is specified in the configuration file lessfs can be mounted without specifying options. In this case lessfs will use a number of default options that make sense in most cases. If you would like to specify the options yourself then remove this line from the configuration.
 .br
@@ -182,6 +191,8 @@ Valid options are 0..5.
 \fB3\fR  Enable logging of critical errors, warnings, informational messages and debug messages.
 .br
 \fB>3\fR Enable logging of critical errors, warnings, informational messages and debug and other messages.
+.SH COMPRESSION STATISTICS
+Lessfs compression statistics can be obtained from the .lessfs/lessfs_stats file that is located in the root of the filesystem.
 .SH DIAGNOSTICS
 To debug the filesystem configure lessfs with : ./configure --enable-debug
 .br

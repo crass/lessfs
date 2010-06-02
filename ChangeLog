@@ -1,3 +1,9 @@
+        release                 : 1.1.0-alpha1   2010-06-02
+                                : This release changes lessfs internals in a major way.
+                                : Lessfs-1.1.0 is _not_ compatible with previous lessfs versions.
+                                : This new version provides a much improved cache layer and
+                                : way better performance. Threading has been improved and lessfs
+                                : is now capable of using many threads /CPU's.
         release                 : 1.0.8   2010-11-30
                                 : This release enables lessfs to be mounted without the
                                 : need to specify other options then the configuration file

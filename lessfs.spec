@@ -1,6 +1,6 @@
 Summary:	Lessfs is an inline data deduplicating filesystem
 Name:		lessfs
-Version:	1.0.8
+Version:	1.1.0-alpha1
 Release:	1%{?dist}
 License:	GPLv3+
 Group:		Applications/System
@@ -55,6 +55,12 @@ rm -rf %{buildroot}
 /etc/lessfs.cfg
 
 %changelog
+* Wed Jun 2 2010 Mark Ruijter <mruijter@gmail.com> - 1.1.0-alpha1
+- This release changes lessfs internals in a major way.
+- Lessfs-1.1.0 is _not_ compatible with previous lessfs versions.
+- This new version provides a much improved cache layer and 
+- way better performance. Threading has been improved and lessfs
+- is now capable of using many threads /CPU's.
 * Tue Mar 30 2010 Mark Ruijter <mruijter@gmail.com> - 1.0.8
 - This release enables lessfs to be mounted without the
 - need to specify other options then the configuration file
