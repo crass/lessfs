@@ -82,8 +82,8 @@ compr *clz_compress(unsigned char *buf, int buflen)
         memcpy(&retdata->data[1], buf, buflen);
         retdata->data[0]=0;
     } else { 
-        retdata->data[0]='Q';
         retdata->size++;
+        retdata->data[0]='Q';
     }
     free(scratch);
     return retdata;

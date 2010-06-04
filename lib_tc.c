@@ -1012,7 +1012,6 @@ void comprfree(compr * compdata)
 DBT *lfsdecompress(DBT *cdata)
 {
    DBT *data=NULL;
-   bool done=0;
    int rsize;
    DBT *decrypted;
 
@@ -1026,33 +1025,33 @@ DBT *lfsdecompress(DBT *cdata)
 
    if ( decrypted->data[0] == 0 || decrypted->data[0] == 'Q') {
       data = (DBT *)clz_decompress(decrypted->data, decrypted->size);
-      done=1;
+      return data;
    }
 #ifdef LZO
    if ( decrypted->data[0] == 'L') {
       data = (DBT *)lzo_decompress(decrypted->data, decrypted->size);
-      done=1;
+      return data;
    }
 #endif
    if ( decrypted->data[0] == 'G') {
       data=s_malloc(sizeof(DBT));
       data->data = (unsigned char *)tcgzipdecode((const char *)&decrypted->data[1], decrypted->size-1, &rsize);
       data->size=rsize;
-      done=1;
+      return data;
    }
    if ( decrypted->data[0] == 'B') {
       data=s_malloc(sizeof(DBT));
       data->data = (unsigned char *)tcbzipdecode((const char *)&decrypted->data[1], decrypted->size-1, &rsize);
       data->size=rsize;
-      done=1;
+      return data;
    }
    if ( decrypted->data[0] == 'D') {
       data=s_malloc(sizeof(DBT));
       data->data = (unsigned char *)tcinflate((const char *)&decrypted->data[1], decrypted->size-1, &rsize);
       data->size=rsize;
-      done=1;
+      return data;
    }
-   if (!done) die_dataerr("Data found with unsupported compression type %c",decrypted->data[0]);
+   die_dataerr("Data found with unsupported compression type %c",decrypted->data[0]);
    return data;
 }
 
@@ -1977,12 +1976,10 @@ DBT *lfscompress(unsigned char *dbdata, unsigned long dsize)
   case 'L':
 #ifdef LZO
     compressed = (DBT *)lzo_compress(dbdata, dsize);
-    compressed->data[0]='L';
 #endif
     break;
   case 'Q':
     compressed = (DBT *)clz_compress(dbdata, dsize);
-    compressed->data[0]='Q';
     break;
   default:
     compressed=(DBT *)tc_compress(dbdata, dsize);
