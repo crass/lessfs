@@ -8,11 +8,14 @@ URL:            http://www.lessfs.com
 Source:         http://downloads.sourceforge.net/%{name}/%{name}-%{version}.tar.gz
 BuildRoot:      %{_tmppath}/%{name}-%{version}-%{release}
 BuildRequires:  tokyocabinet-devel 
-BuildRequires:  openssl-devel
+BuildRequires:  openssl-devel 
+BuildRequires:  mhash-devel
 BuildRequires:  fuse-devel
 BuildRequires:  autoconf
 
 Requires: fuse
+Requires: mhash
+Requires: tokyocabinet
 
 %description
 Lessfs is an inline data deduplicating filesystem.

@@ -1030,7 +1030,7 @@ DBT *lfsdecompress(DBT *cdata)
    }
 #ifdef LZO
    if ( decrypted->data[0] == 'L') {
-      data = lzo_decompress(decrypted->data, decrypted->size);
+      data = (DBT *)lzo_decompress(decrypted->data, decrypted->size);
       done=1;
    }
 #endif
@@ -1977,10 +1977,12 @@ DBT *lfscompress(unsigned char *dbdata, unsigned long dsize)
   case 'L':
 #ifdef LZO
     compressed = (DBT *)lzo_compress(dbdata, dsize);
+    compressed->data[0]='L';
 #endif
     break;
   case 'Q':
     compressed = (DBT *)clz_compress(dbdata, dsize);
+    compressed->data[0]='Q';
     break;
   default:
     compressed=(DBT *)tc_compress(dbdata, dsize);

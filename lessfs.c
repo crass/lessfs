@@ -713,8 +713,6 @@ void add2cache (INOBNO *inobno, const char *buf, off_t offsetblock, size_t bsize
                    inobno->blocknr, 0, BLKSIZE, 0);
 pending:
    write_lock();
-   LDEBUG("Current %lu",tctreernum(cachetree)*2);
-   LDEBUG("Max %llu",config->cachesize);
    if ( tctreernum(cachetree)*2 > config->cachesize ||\
         tctreernum(rdtree)*2 > config->cachesize ) {
       flush_wait(inobno->inode);
@@ -722,7 +720,6 @@ pending:
    }
    key=(char *)tctreeget(rdtree, (void *)inobno, sizeof(INOBNO), &size);
    if ( NULL != key ) {
-     LDEBUG("Found %llu-%llu in rdtree",inobno->inode,inobno->blocknr);
      memcpy(&p,key,size);
      ccachedta=(CCACHEDTA *)p;
      ccachedta->creationtime=time(NULL);
@@ -732,7 +729,6 @@ pending:
      }
      ccachedta->dirty=1;
      ccachedta->pending=0;
-     LDEBUG("Set ccachedta->dirty=1 for %llu-%llu",inobno->inode,inobno->blocknr);
      memcpy((void *)&ccachedta->data[offsetblock],buf,bsize);
      if ( ccachedta->datasize < offsetblock+bsize ) ccachedta->datasize=offsetblock+bsize;
      release_write_lock();
@@ -766,12 +762,10 @@ pending:
    p=(unsigned long long)ccachedta;
 // A full block can be processed right away.
    if ( bsize == BLKSIZE ) {
-      LDEBUG("Write %llu-%llu to cachetree",inobno->inode,inobno->blocknr);
       tctreeput(cachetree, (void *)inobno, sizeof(INOBNO), (void *)&p, sizeof(unsigned long long));
       ccachedta->dirty=0;
    }
 // When this is not a full block a separate thread is used.
-   LDEBUG("Write %llu-%llu to rdtree",inobno->inode,inobno->blocknr);
    tctreeput(rdtree, (void *)inobno, sizeof(INOBNO), (void *)&p, sizeof(unsigned long long));
    release_write_lock();
    EFUNC;
