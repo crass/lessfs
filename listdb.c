@@ -41,9 +41,8 @@
 #include "retcodes.h"
 #ifdef LZO
 #include "lib_lzo.h"
-#else
-#include "lib_qlz.h"
 #endif
+#include "lib_qlz.h"
 #include "lib_tc.h"
 #ifdef SHA3
 #include "lib_BMW_SHA3api_ref.h"
@@ -114,7 +113,6 @@ void flistdbu()
     char *asc_hash;
     char *key;
     int size;
-    unsigned long long counter;
     INUSE *inuse;
     unsigned long rsize;
     unsigned long long nextoffet;
@@ -291,7 +289,6 @@ void listfree()
     unsigned long long *dbkey;
     unsigned long long *dboffset;
     int dbsize;
-    bool found = 0;
 
     cur = tcbdbcurnew(freelist);
     tcbdbcurfirst(cur);

@@ -1,6 +1,6 @@
 Summary:	Lessfs is an inline data deduplicating filesystem
 Name:		lessfs
-Version:	1.1.0-alpha1
+Version:	1.1.0-alpha3
 Release:	1%{?dist}
 License:	GPLv3+
 Group:		Applications/System

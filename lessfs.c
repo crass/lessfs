@@ -64,9 +64,8 @@
 #include <stdbool.h>
 #ifdef LZO
 #include "lib_lzo.h"
-#else
-#include "lib_qlz.h"
 #endif
+#include "lib_qlz.h"
 #include "lib_tc.h"
 #include "lib_net.h"
 #include "file_io.h"
@@ -249,17 +248,36 @@ static int lessfs_mkdir(const char *path, mode_t mode)
 static int lessfs_unlink(const char *path)
 {
     int res;
+    struct stat *stbuf;
     FUNC;
+
 // /.lessfs_stats can not be deleted
     if ( 0 == strcmp(path,"/.lessfs/lessfs_stats")) return(0);
+    stbuf = s_malloc(sizeof(struct stat));
     get_global_lock();
+    res = dbstat(path, stbuf);
+    if (res != 0) {
+        release_global_lock();
+        free(stbuf);
+        return (res);
+    }
+    write_lock();
+    flush_wait(stbuf->st_ino);
+    while (wait_pending()) {
+       flush_wait(stbuf->st_ino);
+       release_write_lock();
+       usleep(100000);
+       write_lock();
+    }
     if (NULL != config->blockdatabs) {
         res = db_unlink_file(path);
     } else {
         res = file_unlink_file(path);
     }
     if ( config->relax == 0 ) dbsync();
+    release_write_lock();
     release_global_lock();
+    free(stbuf);
     EFUNC;
     return res;
 }
@@ -409,17 +427,19 @@ static int lessfs_truncate(const char *path, off_t size)
     res = dbstat(path, stbuf);
     if (res != 0) {
         release_global_lock();
+        free(stbuf);
         return (res);
     }
     if (S_ISDIR(stbuf->st_mode)) {
         release_global_lock();
+        free(stbuf);
         return (-EISDIR);
     }
 
     LDEBUG("lessfs_truncate : %s truncate from %llu to %llu",path,stbuf->st_size,size);
     /* Flush the blockcache before we continue. */
-    flush_wait(stbuf->st_ino);
     write_lock(); 
+    flush_wait(stbuf->st_ino);
     while (wait_pending()) {
        flush_wait(stbuf->st_ino);
        release_write_lock();
@@ -578,7 +598,7 @@ static int lessfs_open(const char *path, struct fuse_file_info *fi)
             memddstat->opened++;
             memddstat->stbuf.st_atim.tv_sec=time(NULL);
             memddstat->stbuf.st_atim.tv_nsec=0;
-            LFATAL("lessfs_open : repeated open ddstat->opened = %u %lu",
+            LDEBUG("lessfs_open : repeated open ddstat->opened = %u %lu",
                    memddstat->opened,memddstat->stbuf.st_atim.tv_sec);
             ddbuf = create_mem_ddbuf(memddstat);
             tctreeput(metatree, &inode, sizeof(unsigned long long),
@@ -604,7 +624,7 @@ static int lessfs_read(const char *path, char *buf, size_t size,
 
     FUNC;
 
-    get_global_lock();
+    //get_global_lock();
     memset(buf, 0, size);
     if ( fi->fh == 7 ) {
        memcpy(buf,&config->lfsstats[offset],size);
@@ -650,7 +670,7 @@ static int lessfs_read(const char *path, char *buf, size_t size,
         memset(tmpbuf,0,BLKSIZE+1);
     }
     free(tmpbuf);
-    release_global_lock();
+    //release_global_lock();
     return (done);
 }
 
@@ -668,19 +688,16 @@ CCACHEDTA *update_stored(unsigned char *hash, INOBNO *inobno, off_t offsetblock)
    ccachedta->pending=0;
    ccachedta->newblock=0;
 
-   group_lock();
    data = search_dbdata(dbdta, hash, config->hashlen);
    if (NULL == data) {
       die_dataerr("Unable to find hash to update");
    }
-   compress_lock();
    uncompdata=lfsdecompress(data);
    LDEBUG("got uncompsize : %lu", uncompdata->size);
    memcpy(&ccachedta->data, uncompdata->data, uncompdata->size);
    ccachedta->datasize=uncompdata->size;
    ccachedta->updated=data->size;
    DBTfree(uncompdata);
-   release_compress_lock();
    DBTfree(data);
    delete_dbb(inobno);
    inuse = getInUse(hash);
@@ -695,7 +712,6 @@ CCACHEDTA *update_stored(unsigned char *hash, INOBNO *inobno, off_t offsetblock)
         inuse--;
         update_inuse(hash, inuse);
    }
-   release_group_lock();
    EFUNC;
    return ccachedta;
 }
@@ -728,7 +744,6 @@ pending:
          goto pending;
      }
      ccachedta->dirty=1;
-     ccachedta->pending=0;
      memcpy((void *)&ccachedta->data[offsetblock],buf,bsize);
      if ( ccachedta->datasize < offsetblock+bsize ) ccachedta->datasize=offsetblock+bsize;
      release_write_lock();
@@ -825,8 +840,6 @@ static int lessfs_release(const char *path, struct fuse_file_info *fi)
     int vsize;
     MEMDDSTAT *memddstat;
     DBT *ddbuf;
-
-    struct stat stbuf;
 
     FUNC;
 // Finish pending i/o for this inode.

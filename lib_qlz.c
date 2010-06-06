@@ -26,7 +26,7 @@ extern int BLKSIZE;
 #error quicklz.c and quicklz.h have different versions
 #endif
 
-#if (defined(__X86__) || defined(__i386__) || defined(i386) || defined(_M_IX86) || defined(__386__) || defined(__x86_64__) || defined(_M_X64))
+#if (defined(x86_64) || defined(__X86__) || defined(__i386__) || defined(i386) || defined(_M_IX86) || defined(__386__) || defined(__x86_64__) || defined(_M_X64))
 	#define X86X64
 #endif
 
@@ -50,7 +50,7 @@ compr *clz_decompress(unsigned char *buf, int buflen)
     retdata = s_zmalloc(sizeof(compr));
     if ( buf[0] == 'Q') {
        retdata->size = qlz_size_decompressed((char *) &buf[1]);
-       retdata->data = s_malloc(retdata->size);
+       retdata->data = s_zmalloc(retdata->size);
        // SCRATCH_DECOMPRESS is defined in the beginning of the quicklz.c file
        scratch = (char *) s_malloc(QLZ_SCRATCH_COMPRESS);
        // decompress and write result
@@ -71,10 +71,10 @@ compr *clz_compress(unsigned char *buf, int buflen)
     retdata = s_zmalloc(sizeof(compr));
 
     // allocate "uncompressed size" + 400 for the destination buffer
-    retdata->data = s_malloc(buflen + 400); // One extra for compression type
+    retdata->data = s_zmalloc(buflen + 400); 
 
     // SCRATCH_COMPRESS is defined in the beginning of the lib_qlz.c file
-    scratch = s_malloc(QLZ_SCRATCH_COMPRESS);
+    scratch = s_zmalloc(QLZ_SCRATCH_COMPRESS);
     retdata->size =
         qlz_compress(buf, (char *) &retdata->data[1], buflen, scratch);
     if (retdata->size >= buflen) {

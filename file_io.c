@@ -54,9 +54,8 @@
 #include "retcodes.h"
 #ifdef LZO
 #include "lib_lzo.h"
-#else
-#include "lib_qlz.h"
 #endif
+#include "lib_qlz.h"
 #include "lib_tc.h"
 #include "lib_crypto.h"
 #include "file_io.h"
@@ -202,7 +201,6 @@ void fl_write_cache(CCACHEDTA *ccachedta, INOBNO *inobno)
    inuse = file_get_inuse((unsigned char *)&ccachedta->hash);
    if (NULL == inuse) {
       inuse = s_malloc(sizeof(INUSE));
-      compress_lock();
       compressed=lfscompress(ccachedta->data, ccachedta->datasize);
       inuse->inuse = 0;
       inuse->offset = get_offset(compressed->size);
@@ -217,7 +215,6 @@ void fl_write_cache(CCACHEDTA *ccachedta, INOBNO *inobno)
          }
       }
       DBTfree(compressed);
-      release_compress_lock();
    }
    bin_write_dbdata(dbb,(char *)inobno,sizeof(INOBNO),ccachedta->hash,config->hashlen);
    inuse->inuse++;
@@ -275,17 +272,18 @@ DBT *file_tgr_read_data(unsigned char *stiger)
             die_dataerr("file_tgr_read_data : read empty block");
         decrypted = s_malloc(sizeof(DBT));
         decrypted->data = s_malloc(inuse->size);
-        if (inuse->size > BLKSIZE)
+        if (inuse->size > BLKSIZE + 1)
             die_dataerr("file_tgr_read_data : unexpected data size, exit");
         decrypted->size =
             (unsigned long) s_pread(fdbdta, decrypted->data, inuse->size,
                                     inuse->offset);
-        if (decrypted->size > BLKSIZE)
+        if (decrypted->size > BLKSIZE + 1)
             die_dataerr("file_tgr_read_data : read empty block");
         free(inuse);
     } else {
         loghash("file_tgr_read_data - unable to find dbdta block hash :",
                 stiger);
+        return NULL;
     }
     EFUNC;
     return decrypted;
@@ -312,10 +310,8 @@ unsigned long long file_read_block(unsigned long long blocknr,
      write_lock();
      cachedata=(char *)tctreeget(rdtree, (void *)&inobno, sizeof(INOBNO), &vsize);
      if ( NULL == cachedata ) {
-        group_lock();
         tdata=check_block_exists(&inobno);
         if (NULL == tdata) { 
-            release_group_lock();
             release_write_lock();
             return (0);
         }
@@ -325,17 +321,14 @@ unsigned long long file_read_block(unsigned long long blocknr,
             die_dataerr("Could not find block");
         }
         DBTfree(tdata);
-        compress_lock();
         data = lfsdecompress(cdata);
         memcpy(blockdata, data->data, data->size);
         ret = data->size;
         DBTfree(data);
-        release_compress_lock();
         DBTfree(cdata);
-        release_group_lock();
 // When we read a block < BLKSIZE there it is likely that we need
 // to read it again so it makes sense to put it in a cache.
-        if ( size != BLKSIZE ) {
+        if ( size < BLKSIZE ) {
 // Make sure that we don't overflow the cache.
            if ( tctreernum(cachetree)*2 > config->cachesize ||\
                 tctreernum(rdtree)*2 > config->cachesize ) {
@@ -391,7 +384,6 @@ void put_on_freelist(INUSE * inuse)
 
 CCACHEDTA *file_update_stored(unsigned char *hash, INOBNO *inobno, off_t offsetblock)
 {
-   DBT *encrypted;
    DBT *data;
    DBT *uncompdata;
    CCACHEDTA *ccachedta;
@@ -403,18 +395,15 @@ CCACHEDTA *file_update_stored(unsigned char *hash, INOBNO *inobno, off_t offsetb
    ccachedta->pending=0;
    ccachedta->newblock=0;
 
-   group_lock();
    data = file_tgr_read_data(hash);
    if (NULL == data) {
       die_dataerr("Failed to update block");
    }
-   compress_lock();
    uncompdata=lfsdecompress(data);
    memcpy(&ccachedta->data, uncompdata->data, uncompdata->size);
    ccachedta->datasize=uncompdata->size;
    ccachedta->updated=data->size;
    DBTfree(uncompdata);
-   release_compress_lock();
    DBTfree(data);
    delete_dbb(inobno);
    inuse = file_get_inuse(hash);
@@ -428,7 +417,6 @@ CCACHEDTA *file_update_stored(unsigned char *hash, INOBNO *inobno, off_t offsetb
       file_update_inuse(hash, inuse);
    }
    free(inuse);
-   release_group_lock();
    EFUNC;
    return ccachedta;
 }
@@ -483,25 +471,23 @@ int file_fs_truncate(struct stat *stbuf, off_t size, char *bname)
              lastblocknr);
         loghash("file_fs_truncate : tiger :", stiger);
         DBTfree(data);
-        group_lock();
         inuse = file_get_inuse(stiger);
-        if (NULL == inuse)
-            die_dataerr("file_fs_truncate : unexpected data error.");
-        if (inuse->inuse == 1) {
-            put_on_freelist(inuse);
-            loghash("file_fs_truncate : delete_inuse ",stiger); 
-            delete_inuse(stiger);
-            LDEBUG("file_fs_truncate : delete dbb %llu-%llu",inobno.inode,inobno.blocknr);
-            delete_dbb(&inobno);
-        } else {
-            if (inuse->inuse > 1)
-                inuse->inuse--;
-            LDEBUG("file_fs_truncate : delete dbb %llu-%llu",inobno.inode,inobno.blocknr);
-            delete_dbb(&inobno);
-            file_update_inuse(stiger, inuse);
+        if (NULL != inuse) {
+           if (inuse->inuse == 1) {
+               put_on_freelist(inuse);
+               loghash("file_fs_truncate : delete_inuse ",stiger); 
+               delete_inuse(stiger);
+               LDEBUG("file_fs_truncate : delete dbb %llu-%llu",inobno.inode,inobno.blocknr);
+               delete_dbb(&inobno);
+           } else {
+               if (inuse->inuse > 1)
+                   inuse->inuse--;
+               LDEBUG("file_fs_truncate : delete dbb %llu-%llu",inobno.inode,inobno.blocknr);
+               delete_dbb(&inobno);
+               file_update_inuse(stiger, inuse);
+           }
         }
         free(inuse);
-        release_group_lock();
         if (lastblocknr > 0)
             lastblocknr--;
         free(stiger);
@@ -522,7 +508,6 @@ void file_partial_truncate_block(struct stat *stbuf,
     DBT *data;
     unsigned char *stiger;
     INUSE *inuse;
-    DBT cachedata;
 
     FUNC;
     LDEBUG("file_partial_truncate_block : inode %llu, blocknr %llu, offset %u",
@@ -530,17 +515,14 @@ void file_partial_truncate_block(struct stat *stbuf,
     inobno.inode = stbuf->st_ino;
     inobno.blocknr = blocknr;
 
-    group_lock();
     data = search_dbdata(dbb, &inobno, sizeof(INOBNO));
     if (NULL == data) {
-        release_group_lock();
         LDEBUG("Deletion of non existent block?");
         return;
     }
     stiger = s_malloc(data->size);
     memcpy(stiger, data->data, data->size);
     DBTfree(data);
-    release_group_lock();
     blockdata = s_zmalloc(BLKSIZE);
     data = file_tgr_read_data(stiger);
     if ( NULL == data ) {
@@ -584,14 +566,9 @@ int file_unlink_file(const char *path)
     struct stat dirst;
     char *dname;
     char *bname;
-    unsigned char *stiger;
     unsigned long long inode;
-    unsigned long long counter = 0;
-    INUSE *inuse;
-    unsigned long long done = 0;
     time_t thetime;
     void *vdirnode;
-    DBT *bdata;
     DBT *ddbuf;
     DBT *dataptr;
     DDSTAT *ddstat;
@@ -608,12 +585,6 @@ int file_unlink_file(const char *path)
     inode = st.st_ino;
     haslinks = st.st_nlink;
     flush_abort(inode);
-    while (wait_pending()) {
-       flush_wait(st.st_ino);
-       release_write_lock();
-       usleep(100000);
-       write_lock();
-    }
     thetime = time(NULL);
     dname = s_dirname((char *) path);
     /* Change ctime and mtime of the parentdir Posix std posix behavior */
@@ -631,45 +602,6 @@ int file_unlink_file(const char *path)
 
 // Start deleting the actual data blocks.
     (void)file_fs_truncate(&st, 0, bname);
-/*
-    while (1) {
-        bdata = search_dbdata(dbb, &inobno, sizeof(INOBNO));
-        if (bdata == NULL) {
-            if ( inobno.blocknr == 0 ) break;
-            inobno.blocknr--;
-            continue;
-        }
-        stiger = s_malloc(bdata->size);
-        memcpy(stiger, bdata->data, bdata->size);
-        loghash("search inuse for ", stiger);
-        group_lock();
-        inuse = file_get_inuse(stiger);
-        if (NULL != inuse) {
-           if (haslinks == 1) {
-               if (inuse->inuse == 1) {
-                   loghash("unlink_file delete dbu,dbdta for ", stiger);
-                   delete_inuse(stiger);
-                   put_on_freelist(inuse);
-               } else {
-                   if (inuse->inuse > 1)
-                       inuse->inuse--;
-                   loghash("updateInUse dbu,dbdta for ", stiger);
-                   file_update_inuse(stiger, inuse);
-               }
-           }
-           free(inuse);
-        } else log_fatal_hash("unlink_file inuse not found",stiger);
-        free(stiger);
-        release_group_lock();
-        DBTfree(bdata);
-        if (haslinks == 1) {
-            LDEBUG("unlink_file : delete inode %llu - %llu", inobno.inode,
-                   inobno.blocknr);
-            delete_dbb(&inobno);
-        }
-        if ( inobno.blocknr == 0 ) break;
-        inobno.blocknr--;
-    }*/
     if (haslinks == 1) {
         if (0 !=
             (res =

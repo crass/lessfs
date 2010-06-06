@@ -46,9 +46,8 @@
 #include "retcodes.h"
 #ifdef LZO
 #include "lib_lzo.h"
-#else
-#include "lib_qlz.h"
 #endif
+#include "lib_qlz.h"
 #include "lib_tc.h"
 #include "file_io.h"
 

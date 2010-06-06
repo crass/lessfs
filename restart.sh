@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/sh -x
 umount /fuse
 rm /core.*
 rm /core

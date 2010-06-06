@@ -37,7 +37,7 @@ struct configdata {
     char *freelist;
     char *freelistbs;
     char *nexthash;
-    char *commithash;
+    unsigned char *commithash;
     char *hash;
     char *lfsstats;
     unsigned char compression;

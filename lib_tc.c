@@ -56,9 +56,8 @@
 #include "retcodes.h"
 #ifdef LZO
 #include "lib_lzo.h"
-#else
-#include "lib_qlz.h"
 #endif
+#include "lib_qlz.h"
 #include "lib_tc.h"
 #include "lib_crypto.h"
 #include "file_io.h"
@@ -94,9 +93,9 @@ static pthread_mutex_t write_mutex = PTHREAD_MUTEX_INITIALIZER;
 // group_mutex : group actions that need to be grouped. 
 //               For example read inuse, read/write data
 //               to dbdta and fileblock need to be done uninterrupted.
-static pthread_mutex_t group_mutex = PTHREAD_MUTEX_INITIALIZER;
+//static pthread_mutex_t group_mutex = PTHREAD_MUTEX_INITIALIZER;
 // The compress routines are not thread safe.
-static pthread_mutex_t compress_mutex = PTHREAD_MUTEX_INITIALIZER;
+//static pthread_mutex_t compress_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 u_int32_t db_flags, env_flags;
 
@@ -500,16 +499,6 @@ void get_global_lock()
     return;
 }
 
-void group_lock()
-{
-    FUNC;
-    return;
-    pthread_mutex_lock(&group_mutex);
-    EFUNC;
-    return;
-}
-
-
 void write_lock()
 {
     FUNC;
@@ -522,52 +511,6 @@ void release_write_lock()
 {
     FUNC;
     pthread_mutex_unlock(&write_mutex);
-    EFUNC;
-    return;
-}
-
-void compress_lock()
-{
-    FUNC;
-    return;
-    pthread_mutex_lock(&compress_mutex);
-    EFUNC;
-    return;
-}
-
-void release_compress_lock()
-{
-    FUNC;
-    return;
-    pthread_mutex_unlock(&compress_mutex);
-    EFUNC;
-    return;
-}
-
-
-//void hash_lock()
-//{
-//    FUNC;
-//    return;
-//    pthread_mutex_lock(&hash_mutex);
-//    EFUNC;
-//    return;
-//}
-
-//void release_hash_lock()
-//{
-//    FUNC;
-//    return;
-//    pthread_mutex_unlock(&hash_mutex);
-//    EFUNC;
-//    return;
-//}
-
-void release_group_lock()
-{
-    FUNC;
-    return;
-    pthread_mutex_unlock(&group_mutex);
     EFUNC;
     return;
 }
@@ -1027,12 +970,16 @@ DBT *lfsdecompress(DBT *cdata)
       data = (DBT *)clz_decompress(decrypted->data, decrypted->size);
       return data;
    }
-#ifdef LZO
    if ( decrypted->data[0] == 'L') {
+#ifdef LZO
       data = (DBT *)lzo_decompress(decrypted->data, decrypted->size);
       return data;
-   }
+#else
+      LFATAL("lessfs is compiled without LZO support");
+      tc_close(0);
+      exit(EXIT_DATAERR);
 #endif
+   }
    if ( decrypted->data[0] == 'G') {
       data=s_malloc(sizeof(DBT));
       data->data = (unsigned char *)tcgzipdecode((const char *)&decrypted->data[1], decrypted->size-1, &rsize);
@@ -1075,10 +1022,8 @@ unsigned long long readBlock(unsigned long long blocknr,
      write_lock();
      cachedata=(char *)tctreeget(rdtree, (void *)&inobno, sizeof(INOBNO), &vsize);
      if ( NULL == cachedata ) {
-        group_lock();
         tdata=check_block_exists(&inobno);
         if (NULL == tdata) { 
-            release_group_lock();
             release_write_lock();
             return (0);
         }
@@ -1088,12 +1033,9 @@ unsigned long long readBlock(unsigned long long blocknr,
             die_dataerr("Could not find block");
         }
         DBTfree(tdata);
-        compress_lock();
         data = lfsdecompress(cdata);
         memcpy(blockdata, data->data, data->size);
         ret=data->size;
-        release_compress_lock();
-        release_group_lock();
         DBTfree(data);
         DBTfree(cdata);
 // When we read a block < BLKSIZE there it is likely that we need
@@ -1426,7 +1368,7 @@ void update_filesize_onclose(unsigned long long inode)
 
     memddstat = inode_meta_from_cache(inode);
     if (NULL == memddstat) {
-        LFATAL("inode %llu not found to update.", inode);
+        LDEBUG("inode %llu not found to update.", inode);
         return;
     }
     hash_update_filesize(memddstat, inode);
@@ -1766,12 +1708,12 @@ int db_unlink_file(const char *path)
     struct stat dirst;
     char *dname;
     char *bname;
-    unsigned char *stiger;
+//    unsigned char *stiger;
     unsigned long long inode;
-    unsigned long long inuse;
+//    unsigned long long inuse;
     time_t thetime;
     void *vdirnode;
-    DBT *bdata;
+//    DBT *bdata;
     DBT *ddbuf;
     DBT *dataptr;
     DDSTAT *ddstat;
@@ -1786,14 +1728,6 @@ int db_unlink_file(const char *path)
     if (res == -ENOENT)
         return (res);
     inode = st.st_ino;
-    flush_abort(inode);
-    write_lock();
-    while (wait_pending()) {
-       flush_wait(st.st_ino);
-       release_write_lock();
-       usleep(100000);
-       write_lock();
-    }
     haslinks = st.st_nlink;
     thetime = time(NULL);
     dname = s_dirname((char *) path);
@@ -1883,7 +1817,6 @@ int db_unlink_file(const char *path)
         DBTfree(ddbuf);
         ddstatfree(ddstat);
     }
-    release_write_lock();
     free(bname);
     free(dname);
     EFUNC;
@@ -1976,6 +1909,10 @@ DBT *lfscompress(unsigned char *dbdata, unsigned long dsize)
   case 'L':
 #ifdef LZO
     compressed = (DBT *)lzo_compress(dbdata, dsize);
+#else 
+    LFATAL("lessfs is compiled without LZO support");
+    tc_close(0);
+    exit(EXIT_DATAERR);
 #endif
     break;
   case 'Q':
@@ -2004,16 +1941,13 @@ unsigned int db_commit_block(unsigned char *dbdata,
     unsigned int ret = 0;
 
     FUNC;
-    group_lock();
     stiger=thash(dbdata, dsize,MAX_ALLOWED_THREADS-1);
     inuse = getInUse(stiger);
     if (0 == inuse) {
-       compress_lock();
        compressed=lfscompress((unsigned char *) dbdata, dsize);
        ret = compressed->size;
        bin_write_dbdata(dbdta,stiger,config->hashlen,compressed->data,compressed->size);
        DBTfree(compressed);
-       release_compress_lock();
     } else {
         loghash("commit_block : only updated inuse for hash ", stiger);
     }
@@ -2021,7 +1955,6 @@ unsigned int db_commit_block(unsigned char *dbdata,
     update_inuse(stiger, inuse);
     LDEBUG("dbb %llu-%llu",inobno.inode,inobno.blocknr);
     bin_write_dbdata(dbb,(char *)&inobno,sizeof(INOBNO),stiger,config->hashlen);
-    release_group_lock();
     free(stiger);
     return (ret);
 }
@@ -2046,10 +1979,8 @@ void partial_truncate_block(struct stat *stbuf, unsigned long long blocknr,
     inobno.inode = stbuf->st_ino;
     inobno.blocknr = blocknr;
 
-    group_lock();
     data = search_dbdata(dbb, &inobno, sizeof(INOBNO));
     if (NULL == data) {
-        release_group_lock();
         LDEBUG("Deletion of non existent block?");
         return;
     }
@@ -2087,9 +2018,7 @@ void partial_truncate_block(struct stat *stbuf, unsigned long long blocknr,
         delete_dbb(&inobno);
         update_inuse(stiger, inuse);
     }
-    release_group_lock();
     blockdata = s_zmalloc(BLKSIZE);
-    compress_lock();
     uncompdata = lfsdecompress(data);
     if ( uncompdata->size >= offset ) {
        memcpy(blockdata, uncompdata->data, offset);
@@ -2097,7 +2026,6 @@ void partial_truncate_block(struct stat *stbuf, unsigned long long blocknr,
        memcpy(blockdata, uncompdata->data, uncompdata->size);
     }
     DBTfree(uncompdata);
-    release_compress_lock();
     db_commit_block(blockdata,inobno,offset);
     free(stiger);
     DBTfree(data);
@@ -2153,7 +2081,6 @@ int db_fs_truncate(struct stat *stbuf, off_t size, char *bname)
                lastblocknr);
         loghash("lessfs_truncate tiger :", stiger);
         DBTfree(data);
-        group_lock();
         inuse = getInUse(stiger);
         if (inuse == 1) {
             loghash("truncate : delete hash", stiger);
@@ -2170,7 +2097,6 @@ int db_fs_truncate(struct stat *stbuf, off_t size, char *bname)
             delete_dbb(&inobno);
             update_inuse(stiger, inuse);
         }
-        release_group_lock();
         if (lastblocknr > 0)
             lastblocknr--;
         free(stiger);
@@ -2938,7 +2864,11 @@ void parseconfig(int mklessfs)
     config->compression='Q';
     if ( NULL != iv ) {
       if ( 0 == strcasecmp("qlz",iv)) config->compression='Q';
+#ifdef LZO
       if ( 0 == strcasecmp("lzo",iv)) config->compression='L';
+#else
+      if ( 0 == strcasecmp("lzo",iv)) die_dataerr("LZO support is not available: please configure with --with-lzo");
+#endif
       if ( 0 == strcasecmp("gzip",iv)) config->compression='G';
       if ( 0 == strcasecmp("bzip",iv)) config->compression='B';
       if ( 0 == strcasecmp("deflate",iv)) config->compression='D';
@@ -2950,34 +2880,37 @@ void parseconfig(int mklessfs)
        config->hash=iv;
        if ( 0 == strcmp("MHASH_SHA256", iv )) {
           config->selected_hash=MHASH_SHA256;
-          LINFO("The SHA256 hash has been selected");
+          LINFO("Hash SHA256 has been selected");
        }
        if ( 0 == strcmp("MHASH_SHA512", iv )) {
           config->selected_hash=MHASH_SHA512;
-          LINFO("The SHA512 hash has been selected");
+          LINFO("Hash SHA512 has been selected");
        }
        if ( 0 == strcmp("MHASH_WHIRLPOOL",iv)) {
           config->selected_hash=MHASH_WHIRLPOOL;
-          LINFO("The WHIRLPOOL hash has been selected");
+          LINFO("Hash WHIRLPOOL has been selected");
        }
        if ( 0 == strcmp("MHASH_HAVAL256",iv)) {
           config->selected_hash=MHASH_HAVAL256;
-          LINFO("The HAVAL hash has been selected");
+          LINFO("Hash HAVAL has been selected");
        }
        if ( 0 == strcmp("MHASH_SNEFRU256",iv)) {
           config->selected_hash=MHASH_SNEFRU256;
-          LINFO("The SNEFRU hash has been selected");
+          LINFO("Hash SNEFRU has been selected");
        }
        if ( 0 == strcmp("MHASH_RIPEMD256",iv)) {
           config->selected_hash=MHASH_RIPEMD256;
-          LINFO("The RIPEMD256 hash has been selected");
+          LINFO("Hash RIPEMD256 has been selected");
        }
        if ( config->selected_hash == MHASH_TIGER192 )
-          LINFO("The TIGER192 hash has been selected");
-    } else  LINFO("The TIGER hash has been selected");
+          LINFO("Hash MHASH_TIGER192 has been selected");
+    } else  LINFO("Hash MHASH_TIGER192 been selected");
     iv = getenv("HASHLEN");
     if (NULL != iv ) {
        if ( atoi(iv) >= 20 && atoi(iv) <= MAX_HASH_LEN ) {
+           if ( atoi(iv) > 24 && config->selected_hash == MHASH_TIGER192 ) {
+              die_dataerr("MHASH_TIGER192 can not be used with MAX_HASH_LEN > 24");
+           }
            config->hashlen=atoi(iv);
        } else {
            LFATAL("The hash length is invalid.");
@@ -3439,7 +3372,6 @@ void tc_write_cache(CCACHEDTA *ccachedta, INOBNO *inobno)
 
    inuse = getInUse((unsigned char *)&ccachedta->hash);
    if (inuse == 0) {
-      compress_lock();
       compressed=lfscompress(ccachedta->data, ccachedta->datasize);
       bin_write_dbdata(dbdta,&ccachedta->hash,config->hashlen,compressed->data,compressed->size);
       if ( ccachedta->newblock == 1 ) update_meta(inobno->inode,compressed->size,1);
@@ -3451,7 +3383,6 @@ void tc_write_cache(CCACHEDTA *ccachedta, INOBNO *inobno)
          }
       }
       DBTfree(compressed);
-      release_compress_lock();
    }
    bin_write_dbdata(dbb,(char *)inobno,sizeof(INOBNO),ccachedta->hash,config->hashlen);
    inuse++;
@@ -3472,13 +3403,11 @@ void cook_cache(char *key, int ksize, CCACHEDTA *ccachedta, int tnum)
    hash=thash((unsigned char *)&ccachedta->data, ccachedta->datasize, tnum);
    memcpy(&ccachedta->hash,hash,config->hashlen);
    free(hash);
-   group_lock();
    if ( config->blockdatabs != NULL ){
      tc_write_cache(ccachedta, inobno); 
    } else {
      fl_write_cache(ccachedta, inobno);
    }
-   release_group_lock();
    return;
 }
 
