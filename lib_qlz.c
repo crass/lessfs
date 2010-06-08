@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <pthread.h>
 #include "lib_safe.h"
 #define QLZ_COMPRESSION_LEVEL 1
 #define QLZ_STREAMING_BUFFER 0
@@ -21,6 +22,8 @@ extern char *logname;
 extern char *function;
 extern int debug;
 extern int BLKSIZE;
+
+static pthread_mutex_t qlz_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 #if QLZ_VERSION_MAJOR != 1 || QLZ_VERSION_MINOR != 4 || QLZ_VERSION_REVISION != 1
 #error quicklz.c and quicklz.h have different versions
@@ -47,6 +50,7 @@ compr *clz_decompress(unsigned char *buf, int buflen)
 {
     compr *retdata;
     char *scratch;
+    pthread_mutex_lock(&qlz_mutex);
     retdata = s_zmalloc(sizeof(compr));
     if ( buf[0] == 'Q') {
        retdata->size = qlz_size_decompressed((char *) &buf[1]);
@@ -61,6 +65,7 @@ compr *clz_decompress(unsigned char *buf, int buflen)
        retdata->data = s_malloc(retdata->size);
        memcpy(retdata->data,&buf[1],buflen-1);
     }
+    pthread_mutex_unlock(&qlz_mutex);
     return retdata;
 }
 
@@ -68,6 +73,8 @@ compr *clz_compress(unsigned char *buf, int buflen)
 {
     compr *retdata;
     char *scratch;
+
+    pthread_mutex_lock(&qlz_mutex);
     retdata = s_zmalloc(sizeof(compr));
 
     // allocate "uncompressed size" + 400 for the destination buffer
@@ -77,15 +84,10 @@ compr *clz_compress(unsigned char *buf, int buflen)
     scratch = s_zmalloc(QLZ_SCRATCH_COMPRESS);
     retdata->size =
         qlz_compress(buf, (char *) &retdata->data[1], buflen, scratch);
-    if (retdata->size >= buflen) {
-        retdata->size = buflen+1;
-        memcpy(&retdata->data[1], buf, buflen);
-        retdata->data[0]=0;
-    } else { 
-        retdata->size++;
-        retdata->data[0]='Q';
-    }
+    retdata->size++;
+    retdata->data[0]='Q';
     free(scratch);
+    pthread_mutex_unlock(&qlz_mutex);
     return retdata;
 }
 

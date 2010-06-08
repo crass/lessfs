@@ -1871,20 +1871,33 @@ DBT *tc_compress(unsigned char *dbdata, unsigned long dsize)
   {
   case 'G':
     data=tcgzipencode((const char*)dbdata, dsize, &rsize);
+    if (rsize > dsize ) {
+       free(data);
+       goto def;
+    }
     compressed->data=s_malloc(rsize+1);
     compressed->data[0]='G';
     break;
   case 'B':
     data=tcbzipencode((const char*)dbdata, dsize, &rsize);
+    if (rsize > dsize ) {
+       free(data);
+       goto def;
+    }
     compressed->data=s_malloc(rsize+1);
     compressed->data[0]='B';
     break;
   case 'D':
     data=tcdeflate((const char*)dbdata, dsize, &rsize);
+    if (rsize > dsize ) {
+       free(data);
+       goto def;
+    }
     compressed->data=s_malloc(rsize+1);
     compressed->data[0]='D';
     break;
   default:
+def:
     compressed->data=s_malloc(dsize+1);
     memcpy(&compressed->data[1],dbdata,dsize);
     compressed->data[0]=0;
@@ -1909,6 +1922,10 @@ DBT *lfscompress(unsigned char *dbdata, unsigned long dsize)
   case 'L':
 #ifdef LZO
     compressed = (DBT *)lzo_compress(dbdata, dsize);
+    if ( compressed->size > dsize ) {
+       DBTfree(compressed);
+       goto tcc;
+    }
 #else 
     LFATAL("lessfs is compiled without LZO support");
     tc_close(0);
@@ -1917,8 +1934,13 @@ DBT *lfscompress(unsigned char *dbdata, unsigned long dsize)
     break;
   case 'Q':
     compressed = (DBT *)clz_compress(dbdata, dsize);
+    if ( compressed->size > dsize ) {
+       DBTfree(compressed);
+       goto tcc;
+    }
     break;
   default:
+tcc:
     compressed=(DBT *)tc_compress(dbdata, dsize);
   }
   
