@@ -165,11 +165,13 @@ static int lessfs_getattr(const char *path, struct stat *stbuf)
     if (res == -ENAMETOOLONG)
         return (res);
 
-    get_global_lock();
+    get_global_lock((char *)__PRETTY_FUNCTION__);
     res = dbstat(path, stbuf);
     LDEBUG("lessfs_getattr : %s size %llu : result %i",path,
            (unsigned long long) stbuf->st_size, res);
     if ( 0 == strcmp("/.lessfs/lessfs_stats",path)){
+       free(config->lfsstats);
+       config->lfsstats=lessfs_stats();
        stbuf->st_size=strlen(config->lfsstats);
     }
     release_global_lock();
@@ -191,7 +193,7 @@ static int lessfs_readlink(const char *path, char *buf, size_t size)
     FUNC;
 
     LDEBUG("lessfs_readlink : size = %i", (int) size);
-    get_global_lock();
+    get_global_lock((char *)__PRETTY_FUNCTION__);
     res = fs_readlink(path, buf, size);
     release_global_lock();
     return (res);
@@ -203,7 +205,7 @@ static int lessfs_readdir(const char *path, void *buf,
                           struct fuse_file_info *fi)
 {
     int retcode;
-    get_global_lock();
+    get_global_lock((char *)__PRETTY_FUNCTION__);
     retcode = fs_readdir(path, buf, filler, offset, fi);
     release_global_lock();
     return (retcode);
@@ -217,21 +219,21 @@ static int lessfs_mknod(const char *path, mode_t mode, dev_t rdev)
     time_t thetime;
 
     FUNC;
-    get_global_lock();
+    get_global_lock((char *)__PRETTY_FUNCTION__);
     thetime = time(NULL);
     dname = s_dirname((char *) path);
     retcode = dbstat(dname, &stbuf);
     LDEBUG("lessfs_mknod : dbstat returns %i", retcode);
-    if (0 != retcode)
-        return retcode;
-    dbmknod(path, mode, NULL, rdev);
-    stbuf.st_ctim.tv_sec = thetime;
-    stbuf.st_ctim.tv_nsec=0;
-    stbuf.st_mtim.tv_sec = thetime;
-    stbuf.st_mtim.tv_nsec=0;
-    retcode = update_stat(dname, &stbuf);
-    LDEBUG("lessfs_mknod : update_stat returns %i", retcode);
-    free(dname);
+    if (0 == retcode) {
+       dbmknod(path, mode, NULL, rdev);
+       stbuf.st_ctim.tv_sec = thetime;
+       stbuf.st_ctim.tv_nsec=0;
+       stbuf.st_mtim.tv_sec = thetime;
+       stbuf.st_mtim.tv_nsec=0;
+       retcode = update_stat(dname, &stbuf);
+       LDEBUG("lessfs_mknod : update_stat returns %i", retcode);
+       free(dname);
+    }
     release_global_lock();
     return (retcode);
 }
@@ -239,7 +241,7 @@ static int lessfs_mknod(const char *path, mode_t mode, dev_t rdev)
 static int lessfs_mkdir(const char *path, mode_t mode)
 {
     int ret;
-    get_global_lock();
+    get_global_lock((char *)__PRETTY_FUNCTION__);
     ret = fs_mkdir(path, mode);
     release_global_lock();
     return (ret);
@@ -254,21 +256,22 @@ static int lessfs_unlink(const char *path)
 // /.lessfs_stats can not be deleted
     if ( 0 == strcmp(path,"/.lessfs/lessfs_stats")) return(0);
     stbuf = s_malloc(sizeof(struct stat));
-    get_global_lock();
+    get_global_lock((char *)__PRETTY_FUNCTION__);
     res = dbstat(path, stbuf);
     if (res != 0) {
         release_global_lock();
         free(stbuf);
         return (res);
     }
-    write_lock();
+    write_lock((char *)__PRETTY_FUNCTION__);
     flush_wait(stbuf->st_ino);
     while (wait_pending()) {
        flush_wait(stbuf->st_ino);
        release_write_lock();
        usleep(100000);
-       write_lock();
+       write_lock((char *)__PRETTY_FUNCTION__);
     }
+    purge_read_cache(stbuf->st_ino, 1);
     if (NULL != config->blockdatabs) {
         res = db_unlink_file(path);
     } else {
@@ -285,7 +288,7 @@ static int lessfs_unlink(const char *path)
 static int lessfs_rmdir(const char *path)
 {
     int res;
-    get_global_lock();
+    get_global_lock((char *)__PRETTY_FUNCTION__);
     res = fs_rmdir(path);
     release_global_lock();
     return (res);
@@ -297,7 +300,7 @@ static int lessfs_symlink(const char *from, const char *to)
     int res = 0;
 
     FUNC;
-    get_global_lock();
+    get_global_lock((char *)__PRETTY_FUNCTION__);
     res = fs_symlink((char *) from, (char *) to);
     release_global_lock();
     return (res);
@@ -310,7 +313,7 @@ static int lessfs_rename(const char *from, const char *to)
 
     FUNC;
     LDEBUG("lessfs_rename : from %s , to %s", from, to);
-    get_global_lock();
+    get_global_lock((char *)__PRETTY_FUNCTION__);
     res = dbstat(from, &stbuf);
     if (res == 0) {
         update_filesize_onclose(stbuf.st_ino);
@@ -329,7 +332,7 @@ static int lessfs_link(const char *from, const char *to)
     int res = 0;
 
     FUNC;
-    get_global_lock();
+    get_global_lock((char *)__PRETTY_FUNCTION__);
     res = fs_link((char *) from, (char *) to);
     release_global_lock();
     return (res);
@@ -347,10 +350,11 @@ static int lessfs_chmod(const char *path, mode_t mode)
 
     FUNC;
     LDEBUG("lessfs_chmod : %s", path);
-    get_global_lock();
+    get_global_lock((char *)__PRETTY_FUNCTION__);
     thetime = time(NULL);
     res = dbstat(path, &stbuf);
     if ( res != 0 ) return(res);
+    meta_lock((char *)__PRETTY_FUNCTION__);
     data = tctreeget(metatree, &stbuf.st_ino,
                           sizeof(unsigned long long), &vsize);
     if (NULL != data) {
@@ -370,6 +374,7 @@ static int lessfs_chmod(const char *path, mode_t mode)
         stbuf.st_ctim.tv_nsec=0;
         res = update_stat((char *) path, &stbuf);
     }
+    release_meta_lock();
     release_global_lock();
     return (res);
 }
@@ -385,10 +390,11 @@ static int lessfs_chown(const char *path, uid_t uid, gid_t gid)
     DBT *ddbuf;
 
     FUNC;
-    get_global_lock();
+    get_global_lock((char *)__PRETTY_FUNCTION__);
     thetime = time(NULL);
     res = dbstat(path, &stbuf);
-    if ( res != 0 ) return(res);
+    if ( res != 0 ) goto end_unlock;
+    meta_lock((char *)__PRETTY_FUNCTION__);
     data = tctreeget(metatree, &stbuf.st_ino,
                           sizeof(unsigned long long), &vsize);
     if (NULL != data) {
@@ -412,6 +418,8 @@ static int lessfs_chown(const char *path, uid_t uid, gid_t gid)
         stbuf.st_ctim.tv_nsec=0;
         res = update_stat((char *) path, &stbuf);
     }
+    release_meta_lock();
+end_unlock:
     release_global_lock();
     return (res);
 }
@@ -421,7 +429,7 @@ static int lessfs_truncate(const char *path, off_t size)
     int res = 0;
     struct stat *stbuf;
     char *bname;
-    get_global_lock();
+    get_global_lock((char *)__PRETTY_FUNCTION__);
     bname = s_basename((char *) path);
     stbuf = s_malloc(sizeof(struct stat));
     res = dbstat(path, stbuf);
@@ -438,14 +446,15 @@ static int lessfs_truncate(const char *path, off_t size)
 
     LDEBUG("lessfs_truncate : %s truncate from %llu to %llu",path,stbuf->st_size,size);
     /* Flush the blockcache before we continue. */
-    write_lock(); 
+    write_lock((char *)__PRETTY_FUNCTION__); 
     flush_wait(stbuf->st_ino);
     while (wait_pending()) {
        flush_wait(stbuf->st_ino);
        release_write_lock();
        usleep(100000);
-       write_lock();
+       write_lock((char *)__PRETTY_FUNCTION__);
     }
+    purge_read_cache(stbuf->st_ino, 1);
     if ( size < stbuf->st_size ) {
        if (NULL != config->blockdatabs) {
            res = db_fs_truncate(stbuf, size, bname);
@@ -475,12 +484,9 @@ static int lessfs_utimens(const char *path, const struct timespec ts[2])
     MEMDDSTAT *memddstat;
 
     FUNC;
-    get_global_lock();
+    get_global_lock((char *)__PRETTY_FUNCTION__);
     res = dbstat(path, &stbuf);
-    if ( res != 0 ) {
-       release_global_lock();
-       return(res);
-    }
+    if ( res != 0 ) goto out;
     data = tctreeget(metatree, &stbuf.st_ino,
                           sizeof(unsigned long long), &vsize);
     if (NULL != data) {
@@ -517,6 +523,7 @@ static int lessfs_utimens(const char *path, const struct timespec ts[2])
         DBTfree(ddbuf);
         ddstatfree(ddstat);
     }
+out:
     release_global_lock();
     return (res);
 }
@@ -555,7 +562,7 @@ static int lessfs_open(const char *path, struct fuse_file_info *fi)
     LDEBUG("lessfs_open : %s strlen %i : uid %u", path,
            strlen((char *) path), fuse_get_context()->uid);
 
-    get_global_lock();
+    get_global_lock((char *)__PRETTY_FUNCTION__);
     res = dbstat(path, &stbuf);
     if (res == -ENOENT) {
         fi->fh = 0;
@@ -565,7 +572,7 @@ static int lessfs_open(const char *path, struct fuse_file_info *fi)
     } else {
         fi->fh = stbuf.st_ino;
         inode = stbuf.st_ino;
-        write_lock();
+        write_lock((char *)__PRETTY_FUNCTION__);
         flush_wait(inode);
         release_write_lock();
         bname = s_basename((char *) path);
@@ -576,6 +583,7 @@ static int lessfs_open(const char *path, struct fuse_file_info *fi)
         if (dataptr == NULL) {
             blocknr--;          /* Invalid block in cache */
 //  Initialize the cache
+            meta_lock((char *)__PRETTY_FUNCTION__);
             memddstat = s_malloc(sizeof(MEMDDSTAT));
             memcpy(&memddstat->stbuf, &stbuf, sizeof(struct stat));
             memcpy(&memddstat->filename, bname, strlen(bname) + 1);
@@ -591,9 +599,11 @@ static int lessfs_open(const char *path, struct fuse_file_info *fi)
             ddbuf = create_mem_ddbuf(memddstat);
             tctreeput(metatree, &inode, sizeof(unsigned long long),
                               (void *) ddbuf->data, ddbuf->size);
+            release_meta_lock();
             DBTfree(ddbuf);
             memddstatfree(memddstat);
         } else {
+            meta_lock((char *)__PRETTY_FUNCTION__);
             memddstat = (MEMDDSTAT *) dataptr;
             memddstat->opened++;
             memddstat->stbuf.st_atim.tv_sec=time(NULL);
@@ -603,6 +613,7 @@ static int lessfs_open(const char *path, struct fuse_file_info *fi)
             ddbuf = create_mem_ddbuf(memddstat);
             tctreeput(metatree, &inode, sizeof(unsigned long long),
                               (void *) ddbuf->data, ddbuf->size);
+            release_meta_lock();
             DBTfree(ddbuf);
         }
         free(bname);
@@ -624,10 +635,10 @@ static int lessfs_read(const char *path, char *buf, size_t size,
 
     FUNC;
 
-    //get_global_lock();
+    get_global_lock((char *)__PRETTY_FUNCTION__);
     memset(buf, 0, size);
     if ( fi->fh == 7 ) {
-       memcpy(buf,&config->lfsstats[offset],size);
+       strncpy(buf, &config->lfsstats[offset], size);
        release_global_lock();
        return(size);
     }
@@ -670,7 +681,7 @@ static int lessfs_read(const char *path, char *buf, size_t size,
         memset(tmpbuf,0,BLKSIZE+1);
     }
     free(tmpbuf);
-    //release_global_lock();
+    release_global_lock();
     return (done);
 }
 
@@ -683,7 +694,7 @@ CCACHEDTA *update_stored(unsigned char *hash, INOBNO *inobno, off_t offsetblock)
    unsigned long long inuse;
 
    ccachedta=s_zmalloc(sizeof(CCACHEDTA));
-   ccachedta->creationtime=time(NULL);
+   set_curtime(ccachedta->creationtime);
    ccachedta->dirty=1;
    ccachedta->pending=0;
    ccachedta->newblock=0;
@@ -700,6 +711,7 @@ CCACHEDTA *update_stored(unsigned char *hash, INOBNO *inobno, off_t offsetblock)
    DBTfree(uncompdata);
    DBTfree(data);
    delete_dbb(inobno);
+   create_hash_note(hash);
    inuse = getInUse(hash);
    if (inuse <= 1) {
         delete_inuse(hash);
@@ -712,6 +724,7 @@ CCACHEDTA *update_stored(unsigned char *hash, INOBNO *inobno, off_t offsetblock)
         inuse--;
         update_inuse(hash, inuse);
    }
+   delete_hash_note(hash);
    EFUNC;
    return ccachedta;
 }
@@ -724,33 +737,42 @@ void add2cache (INOBNO *inobno, const char *buf, off_t offsetblock, size_t bsize
    char *key;
    DBT *data=NULL;
 
-   FUNC;
-   update_filesize(inobno->inode, bsize, offsetblock,
-                   inobno->blocknr, 0, BLKSIZE, 0);
 pending:
-   write_lock();
-   if ( tctreernum(cachetree)*2 > config->cachesize ||\
-        tctreernum(rdtree)*2 > config->cachesize ) {
-      flush_wait(inobno->inode);
-      flush_queue(0,0);
-   }
-   key=(char *)tctreeget(rdtree, (void *)inobno, sizeof(INOBNO), &size);
+   write_lock((char *)__PRETTY_FUNCTION__);
+   key=(char *)tctreeget(delayedqtree, (void *)inobno, sizeof(INOBNO), &size);
    if ( NULL != key ) {
      memcpy(&p,key,size);
      ccachedta=(CCACHEDTA *)p;
-     ccachedta->creationtime=time(NULL);
      while(ccachedta->pending == 1 ) {
          release_write_lock();
          goto pending;
      }
+     set_curtime(ccachedta->creationtime);
      ccachedta->dirty=1;
      memcpy((void *)&ccachedta->data[offsetblock],buf,bsize);
      if ( ccachedta->datasize < offsetblock+bsize ) ccachedta->datasize=offsetblock+bsize;
+     update_filesize(inobno->inode, bsize, offsetblock,
+                     inobno->blocknr);
      release_write_lock();
-     EFUNC;
      return;
    }
-
+   if ( tctreernum(workqtree)*2 > config->cachesize ||\
+        tctreernum(delayedqtree)*2 > config->cachesize ||\
+        tctreernum(readcachetree)*2 > config->cachesize) {
+      flush_wait(inobno->inode);
+      flush_queue(0,0);
+      purge_read_cache(0,0);
+   }
+   key=(char *)tctreeget(readcachetree, (void *)inobno, sizeof(INOBNO), &size);
+   if ( NULL != key ) {
+      memcpy(&p,key,size);
+      ccachedta=(CCACHEDTA *)p;
+      tctreeout(readcachetree,key, size);
+      //LFATAL("add2cache free %llu",p);
+      free(ccachedta);
+   }
+   update_filesize(inobno->inode, bsize, offsetblock,
+                   inobno->blocknr);
    if ( bsize < BLKSIZE ) {
       data=check_block_exists(inobno);
       if ( NULL != data ) {
@@ -768,7 +790,7 @@ pending:
       ccachedta=s_zmalloc(sizeof(CCACHEDTA));
       memcpy(&ccachedta->data[offsetblock],buf,bsize);
       ccachedta->datasize=offsetblock+bsize;
-      ccachedta->creationtime=time(NULL);
+      set_curtime(ccachedta->creationtime);
       ccachedta->dirty=1;
       ccachedta->pending=0;
       ccachedta->newblock=1;
@@ -777,13 +799,12 @@ pending:
    p=(unsigned long long)ccachedta;
 // A full block can be processed right away.
    if ( bsize == BLKSIZE ) {
-      tctreeput(cachetree, (void *)inobno, sizeof(INOBNO), (void *)&p, sizeof(unsigned long long));
+      tctreeput(workqtree, (void *)inobno, sizeof(INOBNO), (void *)&p, sizeof(unsigned long long));
       ccachedta->dirty=0;
    }
 // When this is not a full block a separate thread is used.
-   tctreeput(rdtree, (void *)inobno, sizeof(INOBNO), (void *)&p, sizeof(unsigned long long));
+   tctreeput(delayedqtree, (void *)inobno, sizeof(INOBNO), (void *)&p, sizeof(unsigned long long));
    release_write_lock();
-   EFUNC;
    return;
 }
 
@@ -796,7 +817,7 @@ static int lessfs_write(const char *path, const char *buf, size_t size,
     INOBNO inobno;
 
     FUNC;
-    get_global_lock();
+    get_global_lock((char *)__PRETTY_FUNCTION__);
     LDEBUG("lessfs_write offset %llu size %lu", offset, (unsigned long)size);
     inobno.inode = fi->fh;
     while ( 1 )
@@ -843,10 +864,11 @@ static int lessfs_release(const char *path, struct fuse_file_info *fi)
 
     FUNC;
 // Finish pending i/o for this inode.
-    get_global_lock();
-    write_lock();
+    get_global_lock((char *)__PRETTY_FUNCTION__);
+    write_lock((char *)__PRETTY_FUNCTION__);
     flush_wait(fi->fh);
     release_write_lock();
+    meta_lock((char *)__PRETTY_FUNCTION__);
     dataptr = tctreeget(metatree, &fi->fh, sizeof(unsigned long long), &vsize);
     if (dataptr != NULL) {
         memddstat = (MEMDDSTAT *) dataptr;
@@ -870,6 +892,7 @@ static int lessfs_release(const char *path, struct fuse_file_info *fi)
     }
     (void) path;
     (void) fi;
+    release_meta_lock();
     release_global_lock();
     EFUNC;
     return 0;
@@ -881,8 +904,8 @@ static int lessfs_fsync(const char *path, int isdatasync,
     FUNC;
     (void) path;
     (void) isdatasync;
-    get_global_lock();
-    write_lock();
+    get_global_lock((char *)__PRETTY_FUNCTION__);
+    write_lock((char *)__PRETTY_FUNCTION__);
     flush_wait(fi->fh);
     release_write_lock();
     /* Living on the edge, wait for pending I/O but do not flush the caches. */
@@ -965,7 +988,7 @@ void freeze_nospace(char *dbpath)
     LFATAL
         ("Filesystem for database %s has insufficient space to continue, freezing I/O",
          dbpath);
-    get_global_lock();
+    get_global_lock((char *)__PRETTY_FUNCTION__);
     tc_close(1);
     LFATAL("All IO is now suspended until space comes available.");
     LFATAL
@@ -1094,6 +1117,7 @@ void *housekeeping_worker(void *arg)
 
 void show_lock_status(int csocket)
 {
+   char *msg;
    timeoutWrite(3, csocket,
       "---------------------\n",
       strlen
@@ -1103,10 +1127,9 @@ void show_lock_status(int csocket)
       strlen
       ("normally unset\n\n"));
    if ( 0 != try_global_lock()) {
-      timeoutWrite(3, csocket,
-      "global_lock : 1 (set)\n",
-      strlen
-      ("global_lock : 1 (set)\n"));
+      msg=as_sprintf("global_lock : 1 (set) by %s\n",global_lockedby);
+      timeoutWrite(3, csocket, msg,strlen(msg));
+      free(msg);
    } else {
       release_global_lock();
       timeoutWrite(3, csocket,
@@ -1114,11 +1137,32 @@ void show_lock_status(int csocket)
          strlen
          ("global_lock : 0 (not set)\n"));
    }
-   if ( 0 != try_write_lock()) {
+   if ( 0 != try_meta_lock()) {
+      msg=as_sprintf("meta_lock : 1 (set) by %s\n",meta_lockedby);
+      timeoutWrite(3, csocket, msg,strlen(msg));
+      free(msg);
+   } else {
+      release_meta_lock();
       timeoutWrite(3, csocket,
-      "write_lock : 1 (set)\n",
-      strlen
-      ("write_lock : 1 (set)\n"));
+         "meta_lock : 0 (not set)\n",
+         strlen
+         ("meta_lock : 0 (not set)\n"));
+   }
+   if ( 0 != try_hash_lock()) {
+      msg=as_sprintf("hash_lock : 1 (set) by %s\n",hash_lockedby);
+      timeoutWrite(3, csocket, msg,strlen(msg));
+      free(msg);
+   } else {
+      release_hash_lock();
+      timeoutWrite(3, csocket,
+         "hash_lock : 0 (not set)\n",
+         strlen
+         ("hash_lock : 0 (not set)\n"));
+   }
+   if ( 0 != try_write_lock()) {
+      msg=as_sprintf("write_lock : 1 (set) by %s\n",write_lockedby);
+      timeoutWrite(3, csocket,msg,strlen(msg));
+      free(msg);
    } else {
       release_write_lock();
       timeoutWrite(3, csocket,
@@ -1193,7 +1237,7 @@ void *ioctl_worker(void *arg)
                 if (0 == isfrozen) {
                     result = "All i/o is now suspended.";
                     err = 0;
-                    get_global_lock();
+                    get_global_lock((char *)__PRETTY_FUNCTION__);
                     start_flush_commit();
                     isfrozen = 1;
                 } else {
@@ -1223,7 +1267,7 @@ void *ioctl_worker(void *arg)
                                  ("Suspending i/o for defragmentation\n")))
                     break;
                 err = 0;
-                get_global_lock();
+                get_global_lock((char *)__PRETTY_FUNCTION__);
                 tc_defrag();
                 tc_close(1);
                 tc_open(1,0);
@@ -1274,20 +1318,6 @@ void *ioctl_worker(void *arg)
     return NULL;
 }
 
-// Flush data every flushtime seconds.
-void *lessfs_flush(void *arg)
-{
-    while (1) {
-        sleep(config->flushtime);
-        LDEBUG("lessfs_flush: flush_dta_queue");
-        get_global_lock();
-        start_flush_commit();
-        end_flush_commit();
-        release_global_lock();
-    }
-    pthread_exit(NULL);
-}
-
 void *init_worker(void *arg)
 {
     int count;
@@ -1309,10 +1339,10 @@ void *init_worker(void *arg)
            sleep(1);
         } 
         found[count]=0;
-        write_lock();
-        tctreeiterinit(cachetree);
-        if ( NULL != (key=(char *)tctreeiternext(cachetree, &size))){
-           a=(char *)tctreeget(cachetree, (void *)key, size, &vsize);
+        write_lock((char *)__PRETTY_FUNCTION__);
+        tctreeiterinit(workqtree);
+        if ( NULL != (key=(char *)tctreeiternext(workqtree, &size))){
+           a=(char *)tctreeget(workqtree, (void *)key, size, &vsize);
            if ( NULL != a ) {
               memcpy(&p,a,vsize);
               ccachedta=(CCACHEDTA *)p;
@@ -1320,7 +1350,8 @@ void *init_worker(void *arg)
               dupkey=s_malloc(size);
               memcpy(dupkey,key,size);
               inobno[count]=(INOBNO *)dupkey;
-              tctreeout(cachetree,key,size);
+              tctreeout(workqtree,key,size);
+              //tctreeput(readcachetree,key,size,(void *)&p,sizeof(unsigned long long));
               found[count]++;
               release_write_lock();
               cook_cache(dupkey,size,ccachedta, count); 
@@ -1397,6 +1428,21 @@ void check_blocksize()
     return;
 }
 
+// Flush data every flushtime seconds.
+void *lessfs_flush(void *arg)
+{
+    while (1) {
+        sleep(config->flushtime);
+        LDEBUG("lessfs_flush: flush_dta_queue");
+        get_global_lock((char *)__PRETTY_FUNCTION__);
+        start_flush_commit();
+        end_flush_commit();
+        release_write_lock();
+        release_global_lock();
+    }
+    pthread_exit(NULL);
+}
+
 static void *lessfs_init()
 {
     unsigned int count = 0;
@@ -1434,15 +1480,14 @@ static void *lessfs_init()
     ret = pthread_create(&ioctl_thread, NULL, ioctl_worker, (void *) NULL);
     if (ret != 0)
         die_syserr();
-    ret = pthread_create(&flush_thread, NULL, lessfs_flush, (void *) NULL);
-    if (ret != 0)
-        die_syserr();
     ret =
         pthread_create(&housekeeping_thread, NULL, housekeeping_worker,
                        (void *)NULL);
     if (ret != 0)
         die_syserr();
-
+    ret = pthread_create(&flush_thread, NULL, lessfs_flush, (void *) NULL);
+    if (ret != 0)
+        die_syserr();
     check_blocksize();
     hashstr=as_sprintf("%s%i",config->hash,config->hashlen);
     stiger=thash((unsigned char *)hashstr, strlen(hashstr),MAX_ALLOWED_THREADS);

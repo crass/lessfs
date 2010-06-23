@@ -75,9 +75,9 @@ extern TCHDB *dbs;
 extern TCHDB *dbdta;
 extern TCBDB *dbdirent;
 extern TCBDB *freelist;
-extern TCTREE *cachetree;
-extern TCTREE *rdtree;
-extern TCTREE *cachetree;
+extern TCTREE *workqtree;
+extern TCTREE *delayedqtree;
+extern TCTREE *readcachetree;
 extern int fdbdta;
 
 extern unsigned long long nextoffset;
@@ -161,6 +161,8 @@ unsigned long long get_offset(unsigned long long size)
     bool found = 0;
 
     FUNC;
+
+    get_offset_lock();
     mbytes = round_512(size);
     mbytes = mbytes / 512;
     offset = nextoffset;
@@ -188,6 +190,7 @@ unsigned long long get_offset(unsigned long long size)
     if (!found)
         set_new_offset(size);
     tcbdbcurdel(cur);
+    release_offset_lock();
     LDEBUG("get_offset returns = %llu", offset);
     EFUNC;
     return (offset);
@@ -198,6 +201,7 @@ void fl_write_cache(CCACHEDTA *ccachedta, INOBNO *inobno)
    INUSE *inuse;
    DBT *compressed;
 
+   create_hash_note((unsigned char *)&ccachedta->hash);
    inuse = file_get_inuse((unsigned char *)&ccachedta->hash);
    if (NULL == inuse) {
       inuse = s_malloc(sizeof(INUSE));
@@ -219,6 +223,7 @@ void fl_write_cache(CCACHEDTA *ccachedta, INOBNO *inobno)
    bin_write_dbdata(dbb,(char *)inobno,sizeof(INOBNO),ccachedta->hash,config->hashlen);
    inuse->inuse++;
    file_update_inuse((unsigned char *)&ccachedta->hash, inuse);
+   delete_hash_note((unsigned char *)&ccachedta->hash);
    free(inuse);
    ccachedta->dirty=0;
    ccachedta->pending=0;
@@ -239,6 +244,7 @@ unsigned int file_commit_block(unsigned char *dbdata,
 
     FUNC;
     stiger=thash(dbdata, dsize, MAX_ALLOWED_THREADS);
+    create_hash_note(stiger);
     inuse = file_get_inuse(stiger);
     if (NULL == inuse) {
         inuse = s_malloc(sizeof(INUSE));
@@ -254,6 +260,7 @@ unsigned int file_commit_block(unsigned char *dbdata,
     inuse->inuse++;
     file_update_inuse(stiger, inuse);
     bin_write_dbdata(dbb,(char *)&inobno,sizeof(INOBNO),stiger,config->hashlen);
+    delete_hash_note(stiger);
     free(stiger);
     free(inuse);
     return (ret);
@@ -266,25 +273,23 @@ DBT *file_tgr_read_data(unsigned char *stiger)
     DBT *decrypted = NULL;
 
     FUNC;
+    create_hash_note(stiger);
     inuse = file_get_inuse(stiger);
     if (NULL != inuse) {
         if (inuse->inuse == 0)
             die_dataerr("file_tgr_read_data : read empty block");
         decrypted = s_malloc(sizeof(DBT));
         decrypted->data = s_malloc(inuse->size);
-        if (inuse->size > BLKSIZE + 1)
-            die_dataerr("file_tgr_read_data : unexpected data size, exit");
         decrypted->size =
             (unsigned long) s_pread(fdbdta, decrypted->data, inuse->size,
                                     inuse->offset);
-        if (decrypted->size > BLKSIZE + 1)
-            die_dataerr("file_tgr_read_data : read empty block");
         free(inuse);
     } else {
         loghash("file_tgr_read_data - unable to find dbdta block hash :",
                 stiger);
-        return NULL;
+        decrypted=NULL;
     }
+    delete_hash_note(stiger);
     EFUNC;
     return decrypted;
 }
@@ -307,51 +312,56 @@ unsigned long long file_read_block(unsigned long long blocknr,
      inobno.inode=inode;
      inobno.blocknr=blocknr;
 
-     write_lock();
-     cachedata=(char *)tctreeget(rdtree, (void *)&inobno, sizeof(INOBNO), &vsize);
+     write_lock((char *)__PRETTY_FUNCTION__);
+     cachedata=(char *)tctreeget(delayedqtree, (void *)&inobno, sizeof(INOBNO), &vsize);
      if ( NULL == cachedata ) {
-        tdata=check_block_exists(&inobno);
-        if (NULL == tdata) { 
-            release_write_lock();
-            return (0);
-        }
-        cdata = file_tgr_read_data(tdata->data);
-        if (NULL == cdata ) {
-            log_fatal_hash("Could not find block",tdata->data);
-            die_dataerr("Could not find block");
-        }
-        DBTfree(tdata);
-        data = lfsdecompress(cdata);
-        memcpy(blockdata, data->data, data->size);
-        ret = data->size;
-        DBTfree(data);
-        DBTfree(cdata);
+        cachedata=(char *)tctreeget(readcachetree, (void *)&inobno, sizeof(INOBNO), &vsize);
+        if ( NULL == cachedata ) {
+           tdata=check_block_exists(&inobno);
+           if (NULL == tdata) { 
+               release_write_lock();
+               return (0);
+           }
+           cdata = file_tgr_read_data(tdata->data);
+           if (NULL == cdata ) {
+               log_fatal_hash("Could not find block",tdata->data);
+               die_dataerr("Could not find block");
+           }
+           DBTfree(tdata);
+           data = lfsdecompress(cdata);
+           memcpy(blockdata, data->data, data->size);
+           ret = data->size;
+           DBTfree(data);
+           DBTfree(cdata);
 // When we read a block < BLKSIZE there it is likely that we need
 // to read it again so it makes sense to put it in a cache.
-        if ( size < BLKSIZE ) {
+           if ( size < BLKSIZE ) {
 // Make sure that we don't overflow the cache.
-           if ( tctreernum(cachetree)*2 > config->cachesize ||\
-                tctreernum(rdtree)*2 > config->cachesize ) {
-              flush_wait(inobno.inode);
-              flush_queue(0,0);
-           }
-           ccachedta=s_zmalloc(sizeof(CCACHEDTA));
-           p=(unsigned long long)ccachedta;
-           ccachedta->dirty=0;
-           ccachedta->pending=0;
-           ccachedta->creationtime=time(NULL);
-           memcpy(&ccachedta->data, blockdata, ret);
-           ccachedta->datasize=ret;
-           tctreeput(rdtree, (void *)&inobno, sizeof(INOBNO), (void *)&p, sizeof(unsigned long long));
-        }
-        release_write_lock();
-        ret=BLKSIZE;
-        return(ret);
+              if ( tctreernum(workqtree)*2 > config->cachesize ||\
+                   tctreernum(delayedqtree)*2 > config->cachesize||\
+                   tctreernum(readcachetree)*2 > config->cachesize ) {
+                 flush_wait(inobno.inode);
+                 flush_queue(0,0);
+                 purge_read_cache(0,0);
+              }
+              ccachedta=s_zmalloc(sizeof(CCACHEDTA));
+              p=(unsigned long long)ccachedta;
+              ccachedta->dirty=0;
+              ccachedta->pending=0;
+              set_curtime(ccachedta->creationtime);
+              memcpy(&ccachedta->data, blockdata, ret);
+              ccachedta->datasize=ret;
+              tctreeput(delayedqtree, (void *)&inobno, sizeof(INOBNO), (void *)&p, sizeof(unsigned long long));
+          }
+          release_write_lock();
+          ret=BLKSIZE;
+          return(ret);
+       }
 // Fetch the block from disk and put it in the cache.
      }
      memcpy(&p,cachedata,vsize);
      ccachedta=(CCACHEDTA *)p;
-     ccachedta->creationtime=time(NULL); 
+     set_curtime(ccachedta->creationtime);
      memcpy(blockdata, &ccachedta->data, BLKSIZE);
      ret = BLKSIZE;
      ccachedta->datasize=ret;
@@ -368,6 +378,7 @@ void put_on_freelist(INUSE * inuse)
     FUNC;
     int ecode;
 
+    get_offset_lock();
     calc = round_512(inuse->size);
     calc = calc / 512;
     if (!tcbdbputdup(freelist, (void *) &calc, sizeof(unsigned long long),
@@ -378,6 +389,7 @@ void put_on_freelist(INUSE * inuse)
     }
     LDEBUG("put_on_freelist : %llu blocks at offset %llu", calc,
            inuse->offset);
+    release_offset_lock();
     EFUNC;
     return;
 }
@@ -390,7 +402,7 @@ CCACHEDTA *file_update_stored(unsigned char *hash, INOBNO *inobno, off_t offsetb
    INUSE *inuse;
 
    ccachedta=s_zmalloc(sizeof(CCACHEDTA));
-   ccachedta->creationtime=time(NULL);
+   set_curtime(ccachedta->creationtime);
    ccachedta->dirty=1;
    ccachedta->pending=0;
    ccachedta->newblock=0;
@@ -406,6 +418,7 @@ CCACHEDTA *file_update_stored(unsigned char *hash, INOBNO *inobno, off_t offsetb
    DBTfree(uncompdata);
    DBTfree(data);
    delete_dbb(inobno);
+   create_hash_note(hash);
    inuse = file_get_inuse(hash);
    if (NULL == inuse)
       die_dataerr("file_update_block : hash not found");
@@ -416,6 +429,7 @@ CCACHEDTA *file_update_stored(unsigned char *hash, INOBNO *inobno, off_t offsetb
       inuse->inuse--;
       file_update_inuse(hash, inuse);
    }
+   delete_hash_note(hash);
    free(inuse);
    EFUNC;
    return ccachedta;
@@ -471,6 +485,7 @@ int file_fs_truncate(struct stat *stbuf, off_t size, char *bname)
              lastblocknr);
         loghash("file_fs_truncate : tiger :", stiger);
         DBTfree(data);
+        create_hash_note(stiger);
         inuse = file_get_inuse(stiger);
         if (NULL != inuse) {
            if (inuse->inuse == 1) {
@@ -487,6 +502,7 @@ int file_fs_truncate(struct stat *stbuf, off_t size, char *bname)
                file_update_inuse(stiger, inuse);
            }
         }
+        delete_hash_note(stiger);
         free(inuse);
         if (lastblocknr > 0)
             lastblocknr--;
@@ -539,6 +555,7 @@ void file_partial_truncate_block(struct stat *stbuf,
     file_commit_block(blockdata,inobno,offset);
     DBTfree(data);
     free(blockdata);
+    create_hash_note(stiger);
     inuse = file_get_inuse(stiger);
     if (NULL == inuse)
         die_dataerr
@@ -552,6 +569,7 @@ void file_partial_truncate_block(struct stat *stbuf,
             inuse->inuse--;
         file_update_inuse(stiger, inuse);
     }
+    delete_hash_note(stiger);
     free(inuse);
     free(stiger);
     return;

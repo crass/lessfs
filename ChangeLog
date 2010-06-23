@@ -1,3 +1,22 @@
+        release                 : 1.1.0-beta6    2010-06-21
+                                : Improved cache eviction routines.
+        release                 : 1.1.0-beta5    2010-06-20
+                                : Fixes a bug where reads would mostly mis the cache.
+                                : Read performance has now dramatically (300%) increased
+                                : for chunks of data that are found in the cache.
+        release                 : 1.1.0-beta4    2010-06-19
+                                : Fixes a (rare) race condition with the file_io backend.
+                                : Improved write performance when writing smaller then 
+                                : BLKSIZE data chunks. General code cleaning.
+        release                 : 1.1.0-beta3    2010-06-15
+                                : Under some circumstances a newly written block of data
+                                : with hash (A) could be overwritten before the previous
+                                : write had finished. A new 'per hash' locking mechanisme 
+                                : now makes sure that this never happens.
+                                : See create_hash_note for details.
+        release                 : 1.1.0-beta2    2010-06-13
+                                : Fixed a deadlock. Lessfs now supports deadlock reporting 
+                                : and debugging. ;-)
         release                 : 1.1.0-alpha1   2010-06-02
                                 : This release changes lessfs internals in a major way.
                                 : Lessfs-1.1.0 is _not_ compatible with previous lessfs versions.

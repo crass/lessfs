@@ -37,6 +37,7 @@ void exitFunc();
 void tstamp();
 void estamp();
 char *as_strcat(char *, const char *);
+char *as_strarrcat(const char **, ssize_t);
 int s_read(int, unsigned char *, int);
 int s_write(int, const unsigned char *, int);
 int s_pwrite(int, const void *, size_t, off_t);

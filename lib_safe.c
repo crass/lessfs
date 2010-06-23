@@ -303,6 +303,25 @@ char *as_strcat(char *dest, const char *src)
     return (retstr);
 }
 
+char *as_strarrcat(const char **strarr, ssize_t count)
+{
+    int totallen = 0;
+    int i;
+    char *retstr = NULL, *curpos;
+
+    for (i = 0; i < count; i++) {
+        totallen += strlen(strarr[i]);
+    }
+
+    curpos = retstr = s_zmalloc(totallen + 1);
+    for (i = 0; i < count; i++) {
+        strcpy(curpos, strarr[i]);
+        curpos += strlen(strarr[i]);
+    }
+
+    return retstr;
+}
+
 void *as_sprintf(const char *fmt, ...)
 {
     /* Guess we need no more than 100 bytes. */

@@ -2,7 +2,7 @@
 # Process this file with autoconf to produce a configure script.
 
 AC_PREREQ(2.01)
-AC_INIT(lessfs, 1.1.0-beta1, bugs@lessfs.com)
+AC_INIT(lessfs, 1.1.0-beta5, bugs@lessfs.com)
 AM_INIT_AUTOMAKE([foreign])
 AC_CONFIG_SRCDIR([listdb.c])
 AC_CONFIG_HEADER([config.h])
@@ -94,6 +94,18 @@ AC_ARG_ENABLE(debug,
                         AC_DEFINE(DEBUG, 1,
                                 [Define if you want debug information])
                         DEBUG_MSG="yes"
+                fi
+        ]
+)
+
+DBGLOCK_MSG="no"
+AC_ARG_ENABLE(lckdebug,
+        [  --enable-lckdebug       Enable debugging of mutex deadlocks],
+        [
+                if test "x$withval" != "xno" ; then
+                        AC_DEFINE(DBGLOCK, 1,
+                                [Define if you want to debug locking])
+                        DBGLOCK_MSG="yes"
                 fi
         ]
 )

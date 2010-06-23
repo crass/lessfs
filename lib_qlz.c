@@ -84,8 +84,14 @@ compr *clz_compress(unsigned char *buf, int buflen)
     scratch = s_zmalloc(QLZ_SCRATCH_COMPRESS);
     retdata->size =
         qlz_compress(buf, (char *) &retdata->data[1], buflen, scratch);
-    retdata->size++;
-    retdata->data[0]='Q';
+    if ( retdata->size < buflen ) {
+        retdata->size++;
+        retdata->data[0]='Q';
+    } else {
+        retdata->size=buflen+1;
+        memcpy(&retdata->data[1],buf,buflen);
+        retdata->data[0]=0;
+    }
     free(scratch);
     pthread_mutex_unlock(&qlz_mutex);
     return retdata;

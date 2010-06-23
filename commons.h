@@ -16,9 +16,17 @@ extern TCHDB *dbs;
 extern TCBDB *dbdirent;
 extern TCBDB *freelist;
 extern TCBDB *dbl;
-extern TCTREE *cachetree;
-extern TCTREE *rdtree;
+
+extern TCTREE *workqtree;
+extern TCTREE *delayedqtree;
+extern TCTREE *readcachetree;
+
 extern TCTREE *metatree;
+extern TCTREE *hashtree;
 extern int fdbdta;
 
 extern unsigned long long nextoffset;
+extern const char *write_lockedby;
+extern const char *global_lockedby;
+extern const char *hash_lockedby;
+extern const char *meta_lockedby;

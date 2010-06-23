@@ -28,6 +28,9 @@
 #define MAX_HASH_LEN 64
 #define CACHE_MAX_AGE 30
 #define MAX_ALLOWED_THREADS 1024
+/* Used for debugging locking */
+#define GLOBAL_LOCK_TIMEOUT 7200 //Since deleting or truncating can take a long time...
+#define LOCK_TIMEOUT 3600
 
 typedef unsigned long long int word64;
 typedef unsigned long word32;
@@ -75,7 +78,8 @@ typedef struct {
     unsigned long datasize;
     unsigned char hash[MAX_HASH_LEN];
     int dirty;
-    time_t creationtime;
+//    time_t creationtime;
+    struct timeval creationtime;
     int pending; 
     char newblock;
     unsigned long updated;
@@ -90,9 +94,8 @@ unsigned long long get_next_inode();
 void bin_write_dbdata(TCHDB *, void *, int, void *, int);
 void mbin_write_dbdata(TCMDB *, void *, int, void *, int);
 void dbmknod(const char *, mode_t, char *, dev_t);
-void get_global_lock();
+void get_global_lock(const char *);
 void release_global_lock();
-void release_group_lock();
 void DBTfree(DBT *);
 void delete_key(TCHDB *, void *, int);
 unsigned long long getInUse(unsigned char *);
@@ -103,7 +106,7 @@ DBT *search_dbdata(TCHDB *, void *key, int);
 void update_inuse(unsigned char *, unsigned long long);
 void hash_update_filesize(MEMDDSTAT *, unsigned long long);
 void update_filesize(unsigned long long, unsigned long long, unsigned int,
-                     unsigned long long, bool, unsigned int, unsigned int);
+                     unsigned long long);
 void db_update_block(const char *, unsigned long long,
                      unsigned int, unsigned long long, unsigned long long,
                      unsigned char *);
@@ -148,12 +151,9 @@ void binhash(unsigned char *, int, word64[3]);
 unsigned char *thash(unsigned char *, int, int );
 unsigned char *sha_binhash(unsigned char *, int);
 void release_write_lock();
-void release_hash_lock();
-void write_lock();
-void group_lock();
-void compress_lock();
-void release_compress_lock();
-void hash_lock();
+void write_lock(const char *);
+void meta_lock(const char *);
+void release_meta_lock();
 void write_nfi(unsigned long long);
 void btbin_write_dup(TCBDB *, void *, int, void *, int);
 void *btsearch_keyval(TCBDB *, void *, int, void *, int);
@@ -189,3 +189,7 @@ DBT *lfsdecompress(DBT *);
 DBT *lfscompress(unsigned char *, unsigned long);
 void update_meta(unsigned long long , unsigned long , int );
 char *lessfs_stats();
+void create_hash_note(unsigned char *);
+void wait_hash_pending(unsigned char *);
+void purge_read_cache(unsigned long long, bool);
+void set_curtime(struct timeval tv);

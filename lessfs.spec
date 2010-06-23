@@ -1,7 +1,7 @@
 Summary:	Lessfs is an inline data deduplicating filesystem
 Name:		lessfs
-Version:	1.1.0-alpha3
-Release:	1%{?dist}
+Version:	1.1.0
+Release:	beta6%{?dist}
 License:	GPLv3+
 Group:		Applications/System
 URL:            http://www.lessfs.com
@@ -58,6 +58,27 @@ rm -rf %{buildroot}
 /etc/lessfs.cfg
 
 %changelog
+* Mon Jun 21 2010 Mark Ruijter <mruijter@gmail.com> - 1.1.0-beta6
+- Improved cache eviction routines.
+* Sun Jun 20 2010 Mark Ruijter <mruijter@gmail.com> - 1.1.0-beta5
+- Fixes a bug where reads would mostly mis the cache.
+- Read performance has now dramatically (300%) increased
+- for chunks of data that are found in the cache.
+* Tue Jun 19 2010 Mark Ruijter <mruijter@gmail.com> - 1.1.0-beta4
+- Fixes a (rare) race condition with the file_io backend.
+- Improved write performance when writing smaller then BLKSIZE
+- data chunks. General code cleaning.
+* Tue Jun 15 2010 Mark Ruijter <mruijter@gmail.com> - 1.1.0-beta3
+- Under some circumstances a newly written block of data
+- with hash (A) could be overwritten before the previous
+- write had finished. A new 'per hash' locking mechanisme    
+- now makes sure that this never happens.
+- See create_hash_note for details.
+* Thu Jun 10 2010 Mark Ruijter <mruijter@gmail.com> - 1.1.0-beta2
+- Fixed a deadlock. Lessfs now supports deadlock reporting
+- Telnet localhost 100 -> lockstatus will show details about locking
+* Thu Jun 10 2010 Mark Ruijter <mruijter@gmail.com> - 1.1.0-beta1
+- A number of race conditions has been fixed.
 * Wed Jun 2 2010 Mark Ruijter <mruijter@gmail.com> - 1.1.0-alpha1
 - This release changes lessfs internals in a major way.
 - Lessfs-1.1.0 is _not_ compatible with previous lessfs versions.

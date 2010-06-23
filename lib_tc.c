@@ -50,6 +50,7 @@
 #include <aio.h>
 #include <mhash.h>
 #include <mutils/mhash.h>
+#include <sys/time.h>
 
 #include "lib_safe.h"
 #include "lib_cfg.h"
@@ -77,25 +78,28 @@ TCHDB *dbs = NULL;              // Symlink
 TCHDB *dbdta = NULL;
 TCBDB *dbdirent = NULL;
 TCBDB *freelist = NULL;         // Free list for file_io
-TCTREE *cachetree;
-TCTREE *rdtree;
+
+TCTREE *workqtree;
+TCTREE *delayedqtree;
+TCTREE *readcachetree;
+
 TCTREE *metatree;
+TCTREE *hashtree;
 int fdbdta = 0;
 
 unsigned long long nextoffset = 0;
 int written = 0;
 
-// global_lock_mutex : This lock makes sure that no new actions can be started
-//                     as long as the lock is set.
 static pthread_mutex_t global_lock_mutex = PTHREAD_MUTEX_INITIALIZER;
-// write_mutex : used for write operations.
 static pthread_mutex_t write_mutex = PTHREAD_MUTEX_INITIALIZER;
-// group_mutex : group actions that need to be grouped. 
-//               For example read inuse, read/write data
-//               to dbdta and fileblock need to be done uninterrupted.
-//static pthread_mutex_t group_mutex = PTHREAD_MUTEX_INITIALIZER;
-// The compress routines are not thread safe.
-//static pthread_mutex_t compress_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t meta_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t hash_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t offset_mutex = PTHREAD_MUTEX_INITIALIZER;
+const char *write_lockedby;
+const char *global_lockedby;
+const char *meta_lockedby;
+const char *hash_lockedby;
+const char *offset_lockedby;
 
 u_int32_t db_flags, env_flags;
 
@@ -223,7 +227,7 @@ TCHDB *hashdb_open(char *dbpath, int cacherow,
 void tc_defrag()
 {
     start_flush_commit();
-    write_lock();
+    write_lock((char *)__PRETTY_FUNCTION__);
     if (!tchdboptimize(dbb, atol(config->fileblockbs), 0, 0, HDBTLARGE))
         LINFO("fileblock.tch not optimized");
     if (!tchdboptimize(dbu, atol(config->blockusagebs), 0, 0, HDBTLARGE))
@@ -370,10 +374,11 @@ void tc_open(bool defrag, bool createpath)
     free(dbpath);
 
     if (!defrag) {
-        cachetree=tctreenew();
-        rdtree=tctreenew();
+        workqtree=tctreenew();
+        readcachetree=tctreenew();
+        hashtree=tctreenew();
+        delayedqtree=tctreenew();
         metatree=tctreenew();
-        //dbcache = tcmdbnew();
         if (NULL == config->blockdatabs) {
             if (-1 ==
                 (fdbdta =
@@ -479,10 +484,11 @@ void tc_close(bool defrag)
     tcbdbdel(dbl);
 
     if (!defrag) {
-        tctreeclear(cachetree);
-        tctreeclear(rdtree);
+        tctreeclear(workqtree);
+        tctreeclear(readcachetree);
+        tctreeclear(hashtree);
+        tctreeclear(delayedqtree);
         tctreeclear(metatree);
-        //tcmdbdel(dbcache);
         if (NULL == config->blockdatabs) {
             close(fdbdta);
             free(config->nexthash);
@@ -491,18 +497,139 @@ void tc_close(bool defrag)
     EFUNC;
 }
 
-void get_global_lock()
+void die_lock_report(const char *msg, const char *msg2)
+{
+    LFATAL("die_lock_report : timeout on %s, called by %s",msg2,msg);
+    if ( 0 == try_global_lock() ) {
+       LFATAL("global_lock : 0 (unset)"); 
+    } else {
+       LFATAL("global_lock : 1 (set)");
+    }
+    if ( 0 == try_write_lock() ) {
+       LFATAL("write_lock : 0 (unset)");
+    } else {
+       LFATAL("write_lock : 1 (set)");
+    }
+    if ( 0 == try_meta_lock() ) {
+       LFATAL("meta_lock : 0 (unset)");
+    } else {
+       LFATAL("meta_lock : 1 (set)");
+    }
+    if ( 0 == try_hash_lock() ) {
+       LFATAL("hash_lock : 0 (unset)");
+    } else {
+       LFATAL("hash_lock : 1 (set)");
+    }
+    die_dataerr("Abort after deadlock");
+}
+
+void get_global_lock(const char *msg)
 {
     FUNC;
+#ifdef DBGLOCK
+    struct timespec deltatime;
+    deltatime.tv_sec = time(NULL)+GLOBAL_LOCK_TIMEOUT;
+    deltatime.tv_nsec = 0;
+    int err_code;
+
+    err_code = pthread_mutex_timedlock(&global_lock_mutex, &deltatime );
+    if (err_code != 0) {
+       die_lock_report(msg, __PRETTY_FUNCTION__);
+    }
+#else
     pthread_mutex_lock(&global_lock_mutex);
+#endif
+    global_lockedby=msg;
     EFUNC;
     return;
 }
 
-void write_lock()
+void get_offset_lock(const char *msg)
 {
     FUNC;
+#ifdef DBGLOCK
+    struct timespec deltatime;
+    deltatime.tv_sec = time(NULL)+GLOBAL_LOCK_TIMEOUT;
+    deltatime.tv_nsec = 0;
+    int err_code;
+
+    err_code = pthread_mutex_timedlock(&offset_mutex, &deltatime );
+    if (err_code != 0) {
+       die_lock_report(msg, __PRETTY_FUNCTION__);
+    }
+#else
+    pthread_mutex_lock(&offset_mutex);
+
+#endif
+    offset_lockedby=msg;
+    EFUNC;
+    return;
+}
+
+void meta_lock(const char *msg)
+{
+    FUNC;
+#ifdef DBGLOCK
+    struct timespec deltatime;
+    deltatime.tv_sec = time(NULL)+LOCK_TIMEOUT;
+    deltatime.tv_nsec = 0;
+    int err_code;
+
+    FUNC;
+    err_code = pthread_mutex_timedlock(&meta_mutex, &deltatime );
+    if (err_code != 0) {
+       die_lock_report(msg, __PRETTY_FUNCTION__);
+    }
+#else
+    pthread_mutex_lock(&meta_mutex);
+#endif
+    meta_lockedby=msg;
+    EFUNC;
+    return;
+}
+
+
+
+void get_hash_lock(const char *msg)
+{
+    FUNC;
+#ifdef DBGLOCK
+    struct timespec deltatime;
+    deltatime.tv_sec = time(NULL)+LOCK_TIMEOUT;
+    deltatime.tv_nsec = 0;
+    int err_code;
+
+    FUNC;
+    err_code = pthread_mutex_timedlock(&hash_mutex, &deltatime );
+    if (err_code != 0) {
+       die_lock_report(msg, __PRETTY_FUNCTION__);
+    }
+#else
+    pthread_mutex_lock(&hash_mutex);
+#endif
+    hash_lockedby=msg;
+    EFUNC;
+    return;
+}
+
+void write_lock(const char *msg)
+{
+    FUNC;
+#ifdef DBGLOCK
+    struct timespec deltatime;
+    deltatime.tv_sec = time(NULL)+LOCK_TIMEOUT;
+    deltatime.tv_nsec = 0;
+    int err_code;
+    
+
+    err_code = pthread_mutex_timedlock(&write_mutex, &deltatime );
+    if (err_code != 0) {
+       die_lock_report(msg, __PRETTY_FUNCTION__);
+    }
+#else
     pthread_mutex_lock(&write_mutex);
+#endif
+    write_lockedby=msg;
     EFUNC;
     return;
 }
@@ -515,6 +642,22 @@ void release_write_lock()
     return;
 }
 
+void release_meta_lock()
+{
+    FUNC;
+    pthread_mutex_unlock(&meta_mutex);
+    EFUNC;
+    return;
+}
+
+void release_hash_lock()
+{
+    FUNC;
+    pthread_mutex_unlock(&hash_mutex);
+    EFUNC;
+    return;
+}
+
 void release_global_lock()
 {
     FUNC;
@@ -523,10 +666,32 @@ void release_global_lock()
     return;
 }
 
+void release_offset_lock()
+{
+    FUNC;
+    pthread_mutex_unlock(&offset_mutex);
+    EFUNC;
+    return;
+}
+
 int try_write_lock()
 {
     int res;
     res = pthread_mutex_trylock(&write_mutex);
+    return (res);
+}
+
+int try_meta_lock()
+{
+    int res;
+    res = pthread_mutex_trylock(&meta_mutex);
+    return (res);
+}
+
+int try_hash_lock()
+{
+    int res;
+    res = pthread_mutex_trylock(&hash_mutex);
     return (res);
 }
 
@@ -555,14 +720,13 @@ DBT *create_ddbuf(struct stat stbuf, char *filename, unsigned long long real_siz
 
     ddbuf = s_malloc(sizeof(DBT));
     ddbuf->size = len;
-    ddbuf->data = s_malloc(ddbuf->size);
+    ddbuf->data = s_zmalloc(ddbuf->size);
     memcpy(ddbuf->data, &stbuf, sizeof(struct stat));
     memcpy(ddbuf->data+sizeof(struct stat), &real_size, sizeof(unsigned long long));
     if (NULL != filename) {
         memcpy(ddbuf->data + sizeof(struct stat)+sizeof(unsigned long long), (char *) filename,
                strlen((char *) filename) + 1);
-    } else
-        memset(ddbuf->data + sizeof(struct stat)+sizeof(unsigned long long), 0, 1);
+    }
 
 #ifdef ENABLE_CRYPTO
     if (config->encryptmeta && config->encryptdata) {
@@ -849,10 +1013,11 @@ int get_realsize_fromcache(unsigned long long inode, struct stat *stbuf)
     const char *data;
     MEMDDSTAT *mddstat;
     int vsize;
-
+    meta_lock((char *)__PRETTY_FUNCTION__);
     data = tctreeget(metatree, &inode, sizeof(unsigned long long), &vsize);
     if (data == NULL) {
         LDEBUG("inode %llu not found use size from database.", inode);
+        release_meta_lock();
         return (result);
     }
     result++;
@@ -860,6 +1025,7 @@ int get_realsize_fromcache(unsigned long long inode, struct stat *stbuf)
     memcpy(stbuf, &mddstat->stbuf, sizeof(struct stat));
     LDEBUG("get_realsize_fromcache : return stbuf from cache : size %llu time %lu",
            stbuf->st_size,mddstat->stbuf.st_atim.tv_sec);
+    release_meta_lock();
     return (result);
 }
 
@@ -965,7 +1131,7 @@ DBT *lfsdecompress(DBT *cdata)
       decrypted=decrypt(cdata);
    }
 #endif
-
+ 
    if ( decrypted->data[0] == 0 || decrypted->data[0] == 'Q') {
       data = (DBT *)clz_decompress(decrypted->data, decrypted->size);
       return data;
@@ -1019,51 +1185,56 @@ unsigned long long readBlock(unsigned long long blocknr,
      inobno.inode=inode;
      inobno.blocknr=blocknr;
 
-     write_lock();
-     cachedata=(char *)tctreeget(rdtree, (void *)&inobno, sizeof(INOBNO), &vsize);
+     write_lock((char *)__PRETTY_FUNCTION__);
+     cachedata=(char *)tctreeget(delayedqtree, (void *)&inobno, sizeof(INOBNO), &vsize);
      if ( NULL == cachedata ) {
-        tdata=check_block_exists(&inobno);
-        if (NULL == tdata) { 
-            release_write_lock();
-            return (0);
-        }
-        cdata = search_dbdata(dbdta, tdata->data, tdata->size);
-        if (NULL == cdata) {
-            log_fatal_hash("Could not find block",tdata->data);
-            die_dataerr("Could not find block");
-        }
-        DBTfree(tdata);
-        data = lfsdecompress(cdata);
-        memcpy(blockdata, data->data, data->size);
-        ret=data->size;
-        DBTfree(data);
-        DBTfree(cdata);
+          cachedata=(char *)tctreeget(readcachetree, (void *)&inobno, sizeof(INOBNO), &vsize);
+          if ( NULL == cachedata ) {
+           tdata=check_block_exists(&inobno);
+           if (NULL == tdata) { 
+               release_write_lock();
+               return (0);
+           }
+           cdata = search_dbdata(dbdta, tdata->data, tdata->size);
+           if (NULL == cdata) {
+               log_fatal_hash("Could not find block",tdata->data);
+               die_dataerr("Could not find block");
+           }
+           DBTfree(tdata);
+           data = lfsdecompress(cdata);
+           memcpy(blockdata, data->data, data->size);
+           ret=data->size;
+           DBTfree(data);
+           DBTfree(cdata);
 // When we read a block < BLKSIZE there it is likely that we need
 // to read it again so it makes sense to put it in a cache.
-        if ( size < BLKSIZE ) {
+           if ( size < BLKSIZE ) {
 // Make sure that we don't overflow the cache.
-           if ( tctreernum(cachetree)*2 > config->cachesize ||\
-                tctreernum(rdtree)*2 > config->cachesize ) {
-              flush_wait(inobno.inode);
-              flush_queue(0,0);
-           }
-           ccachedta=s_zmalloc(sizeof(CCACHEDTA));
-           p=(unsigned long long)ccachedta;
-           ccachedta->dirty=0;
-           ccachedta->pending=0;
-           ccachedta->creationtime=time(NULL);
-           memcpy(&ccachedta->data, blockdata, ret);
-           ccachedta->datasize=ret;
-           tctreeput(rdtree, (void *)&inobno, sizeof(INOBNO), (void *)&p, sizeof(unsigned long long));
-        }
-        release_write_lock();
-        ret=BLKSIZE;
-        return(ret);
+              if ( tctreernum(workqtree)*2 > config->cachesize ||\
+                   tctreernum(delayedqtree)*2 > config->cachesize||\
+                   tctreernum(readcachetree)*2 > config->cachesize ) {
+                 flush_wait(inobno.inode);
+                 flush_queue(0,0);
+                 purge_read_cache(0,0);
+              }
+              ccachedta=s_zmalloc(sizeof(CCACHEDTA));
+              p=(unsigned long long)ccachedta;
+              ccachedta->dirty=0;
+              ccachedta->pending=0;
+              set_curtime(ccachedta->creationtime);
+              memcpy(&ccachedta->data, blockdata, ret);
+              ccachedta->datasize=ret;
+              tctreeput(delayedqtree, (void *)&inobno, sizeof(INOBNO), (void *)&p, sizeof(unsigned long long));
+           } 
+           release_write_lock();
+           ret=BLKSIZE;
+           return(ret);
 // Fetch the block from disk and put it in the cache.
+        }
      }
      memcpy(&p,cachedata,vsize);
      ccachedta=(CCACHEDTA *)p;
-     ccachedta->creationtime=time(NULL); 
+     set_curtime(ccachedta->creationtime);
      memcpy(blockdata, &ccachedta->data, ccachedta->datasize);
      ret = BLKSIZE;
      release_write_lock();
@@ -1356,6 +1527,7 @@ MEMDDSTAT *inode_meta_from_cache(unsigned long long inode)
     dataptr = tctreeget(metatree, &inode, sizeof(unsigned long long), &vsize);
     if (dataptr == NULL) {
         LDEBUG("inode %llu not found to update.", inode);
+        release_meta_lock();
         return NULL;
     }
     memddstat = value_tomem_ddstat((char *) dataptr, vsize);
@@ -1387,6 +1559,8 @@ int update_filesize_cache(struct stat *stbuf, off_t size)
     time_t thetime;
 
     thetime = time(NULL);
+
+    meta_lock((char *)__PRETTY_FUNCTION__);
     data = tctreeget(metatree, &stbuf->st_ino,
                           sizeof(unsigned long long), &vsize);
     if (NULL != data) {
@@ -1408,6 +1582,7 @@ int update_filesize_cache(struct stat *stbuf, off_t size)
         dskdata =
             search_dbdata(dbp, &stbuf->st_ino, sizeof(unsigned long long));
         if (NULL == dskdata) {
+            release_meta_lock();
             return (-ENOENT);
         }
         ddstat = value_to_ddstat(dskdata);
@@ -1423,13 +1598,13 @@ int update_filesize_cache(struct stat *stbuf, off_t size)
         DBTfree(dskdata);
     }
     ddstatfree(ddstat);
+    release_meta_lock();
     return(0);
 }
 
+
 void update_filesize(unsigned long long inode, unsigned long long fsize,
-                     unsigned int offsetblock, unsigned long long blocknr,
-                     bool sparse,
-                     unsigned int compressed, unsigned int deduplicated)
+                     unsigned int offsetblock, unsigned long long blocknr)
 {
     const char *dataptr;
     DBT *tigerdata;
@@ -1439,14 +1614,9 @@ void update_filesize(unsigned long long inode, unsigned long long fsize,
     INOBNO inobno;
     int vsize;
 
-    FUNC;
-
-    LDEBUG
-        ("update_filesize : inode %llu fsize %llu offset %u blocknet %llu bool %c",
-         inode, fsize, offsetblock, blocknr, sparse);
+    meta_lock((char *)__PRETTY_FUNCTION__);
     dataptr = tctreeget(metatree, &inode, sizeof(unsigned long long), &vsize);
-    if (dataptr == NULL)
-        return;
+    if (dataptr == NULL)  goto endupdate;
     memddstat = (MEMDDSTAT *) dataptr;
     memddstat->updated++;
     memddstat->blocknr = blocknr;
@@ -1454,58 +1624,35 @@ void update_filesize(unsigned long long inode, unsigned long long fsize,
     memddstat->stbuf.st_mtim.tv_nsec=0;
 
     addblocks = fsize / 512;
-    LDEBUG("update_filesize : addblocks = %i", addblocks);
     if ((memddstat->stbuf.st_blocks + addblocks) * 512 <
         memddstat->stbuf.st_size + fsize)
         addblocks++;
     // The file has not grown in size. This is an updated block.
-    if (!sparse && ((blocknr * BLKSIZE) + offsetblock + fsize) <=
+    if (((blocknr * BLKSIZE) + offsetblock + fsize) <=
         memddstat->stbuf.st_size) {
         inobno.inode = inode;
         inobno.blocknr = blocknr;
-        tigerdata = check_block_exists(&inobno);
-        if (NULL != tigerdata) {
-            LDEBUG
-                ("update_filesize : The file has not grown in size and the block exists. This is an updated block. newsize %llu, size %llu",((blocknr * BLKSIZE) + offsetblock + fsize),memddstat->stbuf.st_size);
+        //tigerdata = check_block_exists(&inobno);
+        //if (NULL != tigerdata) {
             ddbuf = create_mem_ddbuf(memddstat);
             tctreeput(metatree, &inode, sizeof(unsigned long long),
                               (void *) ddbuf->data, ddbuf->size);
             DBTfree(ddbuf);
-            DBTfree(tigerdata);
-            return;
-        } 
+            //DBTfree(tigerdata);
+            goto endupdate;
+        //}
     }
-    // The file size has grown or the block is sparse.
-    if (!sparse) {
-        if (blocknr < 1) {
-            if (memddstat->stbuf.st_size < fsize + offsetblock)
-                memddstat->stbuf.st_size = fsize + offsetblock;
-        } else {
-            if (memddstat->stbuf.st_size <
-                (blocknr * BLKSIZE) + fsize + offsetblock)
-                memddstat->stbuf.st_size =
-                    fsize + offsetblock + (blocknr * BLKSIZE);
-        }
-        if (memddstat->stbuf.st_size > (512 * memddstat->stbuf.st_blocks)) {
-            if ( compressed != BLKSIZE ) {
-               memddstat->stbuf.st_blocks =
-                   memddstat->stbuf.st_blocks + addblocks;
-               LDEBUG
-                ("update_filesize : The file is not sparse and we need to add %i blocks",
-                 addblocks);
-            } else {
-               memddstat->stbuf.st_blocks = memddstat->stbuf.st_blocks + (BLKSIZE/512);
-               LDEBUG
-                ("update_filesize : The file is not sparse and we need to add %i blocks",
-                 BLKSIZE/512);
-            }
-        }
+    if (blocknr < 1) {
+        if (memddstat->stbuf.st_size < fsize + offsetblock)
+            memddstat->stbuf.st_size = fsize + offsetblock;
     } else {
-        LDEBUG
-            ("update_filesize : The file adds a sparse block : add %i blocks",
-             addblocks);
-        memddstat->stbuf.st_blocks =
-            memddstat->stbuf.st_blocks + addblocks;
+        if (memddstat->stbuf.st_size <
+            (blocknr * BLKSIZE) + fsize + offsetblock)
+            memddstat->stbuf.st_size =
+                fsize + offsetblock + (blocknr * BLKSIZE);
+    }
+    if (memddstat->stbuf.st_size > (512 * memddstat->stbuf.st_blocks)) {
+        memddstat->stbuf.st_blocks = memddstat->stbuf.st_blocks + (BLKSIZE/512);
     }
     ddbuf = create_mem_ddbuf(memddstat);
     tctreeput(metatree, &inode, sizeof(unsigned long long),
@@ -1520,8 +1667,41 @@ void update_filesize(unsigned long long inode, unsigned long long fsize,
                           (void *) ddbuf->data, ddbuf->size);
         DBTfree(ddbuf);
     }
-    EFUNC;
+endupdate:
+    release_meta_lock();
     return;
+}
+
+
+void create_hash_note(unsigned char *hash) 
+{
+   unsigned long long inuse=0;
+   wait_hash_pending(hash);
+   get_hash_lock((char *)__PRETTY_FUNCTION__);
+   tctreeput(hashtree, (void *)hash, config->hashlen,&inuse,sizeof(unsigned long long));
+   release_hash_lock();
+}
+
+void wait_hash_pending(unsigned char *hash)
+{
+   const char *data=NULL;  
+   int vsize; 
+   while(1) {
+      get_hash_lock((char *)__PRETTY_FUNCTION__);
+      data = tctreeget(hashtree, hash,
+                       config->hashlen, &vsize);
+      if ( NULL == data ) break;
+      release_hash_lock();
+      usleep(10);
+   }
+   release_hash_lock();
+}
+
+void delete_hash_note(unsigned char *hash)
+{
+   get_hash_lock((char *)__PRETTY_FUNCTION__);
+   tctreeout(hashtree, (void *)hash, config->hashlen);
+   release_hash_lock();
 }
 
 void hash_update_filesize(MEMDDSTAT * memddstat, unsigned long long inode)
@@ -1864,40 +2044,32 @@ DBT *tc_compress(unsigned char *dbdata, unsigned long dsize)
 {
   DBT *compressed;
   int rsize;
-  char *data;
+  char *data=NULL;
 
   compressed=s_malloc(sizeof(DBT));
   switch (config->compression)
   {
   case 'G':
     data=tcgzipencode((const char*)dbdata, dsize, &rsize);
-    if (rsize > dsize ) {
-       free(data);
-       goto def;
-    }
+    if (rsize > dsize ) goto def;
     compressed->data=s_malloc(rsize+1);
     compressed->data[0]='G';
     break;
   case 'B':
     data=tcbzipencode((const char*)dbdata, dsize, &rsize);
-    if (rsize > dsize ) {
-       free(data);
-       goto def;
-    }
+    if (rsize > dsize ) goto def;
     compressed->data=s_malloc(rsize+1);
     compressed->data[0]='B';
     break;
   case 'D':
     data=tcdeflate((const char*)dbdata, dsize, &rsize);
-    if (rsize > dsize ) {
-       free(data);
-       goto def;
-    }
+    if (rsize > dsize ) goto def;
     compressed->data=s_malloc(rsize+1);
     compressed->data[0]='D';
     break;
   default:
 def:
+    if (data) free(data);
     compressed->data=s_malloc(dsize+1);
     memcpy(&compressed->data[1],dbdata,dsize);
     compressed->data[0]=0;
@@ -1922,10 +2094,6 @@ DBT *lfscompress(unsigned char *dbdata, unsigned long dsize)
   case 'L':
 #ifdef LZO
     compressed = (DBT *)lzo_compress(dbdata, dsize);
-    if ( compressed->size > dsize ) {
-       DBTfree(compressed);
-       goto tcc;
-    }
 #else 
     LFATAL("lessfs is compiled without LZO support");
     tc_close(0);
@@ -1934,13 +2102,8 @@ DBT *lfscompress(unsigned char *dbdata, unsigned long dsize)
     break;
   case 'Q':
     compressed = (DBT *)clz_compress(dbdata, dsize);
-    if ( compressed->size > dsize ) {
-       DBTfree(compressed);
-       goto tcc;
-    }
     break;
   default:
-tcc:
     compressed=(DBT *)tc_compress(dbdata, dsize);
   }
   
@@ -1964,6 +2127,7 @@ unsigned int db_commit_block(unsigned char *dbdata,
 
     FUNC;
     stiger=thash(dbdata, dsize,MAX_ALLOWED_THREADS-1);
+    create_hash_note(stiger);
     inuse = getInUse(stiger);
     if (0 == inuse) {
        compressed=lfscompress((unsigned char *) dbdata, dsize);
@@ -1977,6 +2141,7 @@ unsigned int db_commit_block(unsigned char *dbdata,
     update_inuse(stiger, inuse);
     LDEBUG("dbb %llu-%llu",inobno.inode,inobno.blocknr);
     bin_write_dbdata(dbb,(char *)&inobno,sizeof(INOBNO),stiger,config->hashlen);
+    delete_hash_note(stiger);
     free(stiger);
     return (ret);
 }
@@ -2023,6 +2188,7 @@ void partial_truncate_block(struct stat *stbuf, unsigned long long blocknr,
         log_fatal_hash("Hmmm, did not expect this to happen.",stiger);
         die_dataerr("Hmmm, did not expect this to happen.");
     }
+    create_hash_note(stiger);
     inuse = getInUse(stiger);
     if (inuse == 1) {
         loghash("partial_truncate_block : delete hash", stiger);
@@ -2040,6 +2206,7 @@ void partial_truncate_block(struct stat *stbuf, unsigned long long blocknr,
         delete_dbb(&inobno);
         update_inuse(stiger, inuse);
     }
+    delete_hash_note(stiger);
     blockdata = s_zmalloc(BLKSIZE);
     uncompdata = lfsdecompress(data);
     if ( uncompdata->size >= offset ) {
@@ -2103,6 +2270,7 @@ int db_fs_truncate(struct stat *stbuf, off_t size, char *bname)
                lastblocknr);
         loghash("lessfs_truncate tiger :", stiger);
         DBTfree(data);
+        create_hash_note(stiger);
         inuse = getInUse(stiger);
         if (inuse == 1) {
             loghash("truncate : delete hash", stiger);
@@ -2119,6 +2287,7 @@ int db_fs_truncate(struct stat *stbuf, off_t size, char *bname)
             delete_dbb(&inobno);
             update_inuse(stiger, inuse);
         }
+        delete_hash_note(stiger);
         if (lastblocknr > 0)
             lastblocknr--;
         free(stiger);
@@ -3227,9 +3396,9 @@ void flush_abort(unsigned long long inode)
     LDEBUG("flush_abort");
 reflush:
     pending=0; 
-    tctreeiterinit(rdtree);
-    while ( NULL != (key=(char *)tctreeiternext(rdtree, &size))){
-       val=(char *)tctreeget(rdtree, (void *)key, size, &vsize);
+    tctreeiterinit(delayedqtree);
+    while ( NULL != (key=(char *)tctreeiternext(delayedqtree, &size))){
+       val=(char *)tctreeget(delayedqtree, (void *)key, size, &vsize);
        if ( NULL != val ) {
           memcpy(&p,val,vsize);
           ccachedta=(CCACHEDTA *)p;
@@ -3240,8 +3409,10 @@ reflush:
                 goto reflush;
              }
              LDEBUG("flush_abort inode %llu-%llu",inobno->inode,inobno->blocknr);
-             tctreeout(cachetree,key,size);
-             tctreeout(rdtree,key,size);
+             tctreeout(readcachetree,key,size);
+             tctreeout(workqtree,key,size);
+             tctreeout(delayedqtree,key,size);
+             //LFATAL("flush_abort free %llu",p);
              free(ccachedta);
           }
        }
@@ -3262,9 +3433,9 @@ int wait_pending()
   CCACHEDTA *ccachedta;
 
   FUNC;
-  tctreeiterinit(rdtree);
-  while ( NULL != (key=(char *)tctreeiternext(rdtree, &size))){
-     val=(char *)tctreeget(rdtree, (void *)key, size, &vsize);
+  tctreeiterinit(delayedqtree);
+  while ( NULL != (key=(char *)tctreeiternext(delayedqtree, &size))){
+     val=(char *)tctreeget(delayedqtree, (void *)key, size, &vsize);
      if ( NULL != val ) {
         memcpy(&p,val,vsize);
         ccachedta=(CCACHEDTA *)p;
@@ -3286,9 +3457,9 @@ void flush_wait(unsigned long long inode)
     INOBNO *inobno;
     CCACHEDTA *ccachedta;
 
-    tctreeiterinit(rdtree);
-    while ( NULL != (key=(char *)tctreeiternext(rdtree, &size))){
-       val=(char *)tctreeget(rdtree, (void *)key, size, &vsize);
+    tctreeiterinit(delayedqtree);
+    while ( NULL != (key=(char *)tctreeiternext(delayedqtree, &size))){
+       val=(char *)tctreeget(delayedqtree, (void *)key, size, &vsize);
        if ( NULL != val ) {
           memcpy(&p,val,vsize);
           ccachedta=(CCACHEDTA *)p;
@@ -3300,9 +3471,12 @@ void flush_wait(unsigned long long inode)
                 }
              }
              cook_cache(key, size, ccachedta, MAX_ALLOWED_THREADS-1);
-             tctreeout(cachetree,key,size);
-             tctreeout(rdtree,key,size);
-             free(ccachedta);
+//HIER????
+             
+             tctreeput(readcachetree,key,size,val,vsize);
+             tctreeout(workqtree,key,size);
+             tctreeout(delayedqtree,key,size);
+//             free(ccachedta);
           }
        }
     }
@@ -3319,9 +3493,9 @@ void flush_queue(unsigned long long inode, bool force) {
     INOBNO *inobno;
     CCACHEDTA *ccachedta;
 
-    tctreeiterinit(rdtree);
-    while ( NULL != (key=(char *)tctreeiternext(rdtree, &size))){
-       val=(char *)tctreeget(rdtree, (void *)key, size, &vsize);
+    tctreeiterinit(delayedqtree);
+    while ( NULL != (key=(char *)tctreeiternext(delayedqtree, &size))){
+       val=(char *)tctreeget(delayedqtree, (void *)key, size, &vsize);
        if ( NULL != val ) {
           memcpy(&p,val,vsize);
           ccachedta=(CCACHEDTA *)p;
@@ -3329,39 +3503,92 @@ void flush_queue(unsigned long long inode, bool force) {
           if ( ccachedta->dirty == 1 ) {
              if ( ccachedta->pending != 1 ) {
 // Only queue to be processed when it's not in the queue.
-                if ( NULL == tctreeget(cachetree, (void *)key, size, &vsize)) {
+                if ( NULL == tctreeget(workqtree, (void *)key, size, &vsize)) {
                    if ( inode == 0 ) {
 // The processing threads will now pickup the block
-                      tctreeput(cachetree, (void *)inobno, sizeof(INOBNO), (void *)&p, sizeof(unsigned long long));
+                      tctreeput(workqtree, (void *)inobno, sizeof(INOBNO), (void *)&p, sizeof(unsigned long long));
                    } else {
                       if ( inode == inobno->inode ) {
                          LDEBUG("Flush specified inode %llu ->  %llu-%llu from the cache",inode,inobno->inode,inobno->blocknr);
-                         tctreeput(cachetree, (void *)inobno, sizeof(INOBNO), (void *)&p, sizeof(unsigned long long));
+                         tctreeput(workqtree, (void *)inobno, sizeof(INOBNO), (void *)&p, sizeof(unsigned long long));
                       }
                    }
                 }
              }
-          } else {
-// The block is not dirty, eg written to disk and has been in the cache to long.
-// Remove it...
-             if ( ccachedta->creationtime + CACHE_MAX_AGE < time(NULL) ) {
-                 LDEBUG("Remove aged %llu-%llu from the cache",inobno->inode,inobno->blocknr);
-                 tctreeout(cachetree,key,size);
-                 tctreeout(rdtree,key,size);
-                 free(ccachedta);
-             } else {
-                 if ( force ) {
-                    LDEBUG("Force %llu-%llu from the cache",inobno->inode,inobno->blocknr);
-                    tctreeout(cachetree,key,size);
-                    tctreeout(rdtree,key,size);
-                    free(ccachedta);
-                 }
-             }
           }
        }
     }
-    LDEBUG("Database rdtree now holds %llu records and has size %llu",tctreernum(rdtree),tctreemsiz(rdtree));
-    LDEBUG("Database cachetree now holds %llu records and has size %llu",tctreernum(cachetree),tctreemsiz(cachetree));
+    LDEBUG("Database delayedqtree now holds %llu records and has size %llu",tctreernum(delayedqtree),tctreemsiz(delayedqtree));
+    LDEBUG("Database workqtree now holds %llu records and has size %llu",tctreernum(cachetree),tctreemsiz(cachetree));
+    return;
+}
+
+void purge_read_cache(unsigned long long inode, bool force)
+{
+    char *key;
+    int size;
+    int vsize;
+    char *val;
+    unsigned long long p;
+    INOBNO *inobno;
+    CCACHEDTA *ccachedta;
+    struct timeval thetime; 
+
+    unsigned int age=CACHE_MAX_AGE;
+    unsigned int uage=0;
+    
+    set_curtime(thetime);
+
+    while(1) {
+       tctreeiterinit(readcachetree);
+       while ( NULL != (key=(char *)tctreeiternext(readcachetree, &size))){
+          val=(char *)tctreeget(readcachetree, (void *)key, size, &vsize);
+          if ( NULL != val ) {
+             memcpy(&p,val,vsize);
+             ccachedta=(CCACHEDTA *)p;
+             inobno=(INOBNO *)key;
+             if ( inode == 0 ) {
+                 if ( force ) {
+                    tctreeout(readcachetree,key,size);
+                    free(ccachedta);
+                 } else {
+                    if ( ccachedta->creationtime.tv_sec < thetime.tv_sec + age) {
+                        if ( ccachedta->creationtime.tv_usec < thetime.tv_usec + uage) {
+                           tctreeout(readcachetree,key,size);
+                           free(ccachedta);
+                           if (tctreernum(readcachetree)*2 < config->cachesize-(config->cachesize/4)) break;
+                        }
+                    }
+                 }
+                 continue;
+             }
+             if ( inode == inobno->inode ) {
+                if ( force ) {
+                    tctreeout(readcachetree,key,size);
+                    free(ccachedta);
+                } else {
+                   if ( ccachedta->creationtime.tv_sec < thetime.tv_sec + age) {
+                        if ( ccachedta->creationtime.tv_usec < thetime.tv_usec + uage) {
+                           tctreeout(readcachetree,key,size);
+                           free(ccachedta);
+                           if (tctreernum(readcachetree)*2 < config->cachesize-(config->cachesize/4)) break;
+                        }
+                    }
+                }
+             }
+          }
+       }
+       if (force) break;
+       if (tctreernum(readcachetree)*2 < config->cachesize-(config->cachesize/4)) break;
+       if ( uage == 999000) {
+          uage=0;
+          if ( age > 0 ) {
+              age--;
+          } else break;
+       } else {
+          uage=uage+1000;
+       }
+    }
     return;
 }
 
@@ -3372,9 +3599,11 @@ void update_meta(unsigned long long inode, unsigned long size, int sign)
    MEMDDSTAT *mddstat;
 
    LDEBUG("update_meta : inode %llu database.", inode);
+   meta_lock((char *)__PRETTY_FUNCTION__);
    data = tctreeget(metatree, &inode, sizeof(unsigned long long), &vsize);
    if (data == NULL) {
        LFATAL("inode %llu not found use size from database.", inode);
+       release_meta_lock();
        return;
    }
    mddstat = (MEMDDSTAT *) data;
@@ -3384,6 +3613,7 @@ void update_meta(unsigned long long inode, unsigned long size, int sign)
       mddstat->real_size=mddstat->real_size-size;
    }
    tctreeput(metatree, &inode, sizeof(unsigned long long), (void *)mddstat,vsize);
+   release_meta_lock();
    return;
 }
 
@@ -3392,6 +3622,7 @@ void tc_write_cache(CCACHEDTA *ccachedta, INOBNO *inobno)
    unsigned long long inuse;
    DBT *compressed;
 
+   create_hash_note((unsigned char *)&ccachedta->hash);
    inuse = getInUse((unsigned char *)&ccachedta->hash);
    if (inuse == 0) {
       compressed=lfscompress(ccachedta->data, ccachedta->datasize);
@@ -3409,6 +3640,7 @@ void tc_write_cache(CCACHEDTA *ccachedta, INOBNO *inobno)
    bin_write_dbdata(dbb,(char *)inobno,sizeof(INOBNO),ccachedta->hash,config->hashlen);
    inuse++;
    update_inuse((unsigned char *)&ccachedta->hash, inuse);
+   delete_hash_note((unsigned char *)&ccachedta->hash);
    ccachedta->dirty=0;
    ccachedta->pending=0;
    ccachedta->newblock=0;
@@ -3436,9 +3668,9 @@ void cook_cache(char *key, int ksize, CCACHEDTA *ccachedta, int tnum)
 void start_flush_commit()
 {
    unsigned long long lastoffset=0;
-   while ( 0 != tctreernum(cachetree)) {
-      LDEBUG("Waiting for %llu records to drain",tctreernum(cachetree));
-      write_lock();
+   while ( 0 != tctreernum(workqtree)) {
+      LDEBUG("Waiting for %llu records to drain",tctreernum(workqtree));
+      write_lock((char *)__PRETTY_FUNCTION__);
       flush_queue(0,0);
       release_write_lock();
       usleep(10000);
@@ -3480,8 +3712,8 @@ void end_flush_commit() {
    }else tchdbsync(dbdta);
    tchdbsync(dbu);
    tchdbsync(dbb);
-   free(config->lfsstats);
-   config->lfsstats=lessfs_stats();
+   //free(config->lfsstats);
+   //config->lfsstats=lessfs_stats();
    if ( config->transactions ) {
       if ( config->blockdatabs != NULL ){
           tchdbtranbegin(dbdta);
@@ -3499,7 +3731,6 @@ void end_flush_commit() {
 char *lessfs_stats()
 {
     char *lfsmsg;
-    char *msg2;
     char *line;
     char *key;
     int ksize;
@@ -3508,8 +3739,11 @@ char *lessfs_stats()
     unsigned long long inode;
     char *nfi = "NFI";
     CRYPTO *crypto;
+    const char **lines = NULL;
+    int count = 1;
+    lines = s_malloc((tchdbrnum(dbp) + 1) * sizeof(char *));
 
-    lfsmsg=as_sprintf("INODE       SIZE            COMPRESSED_SIZE       FILENAME\n");
+    lines[0] = as_sprintf("  INODE             SIZE  COMPRESSED_SIZE  FILENAME\n");
     /* traverse records */
     tchdbiterinit(dbp);
     while ((key = tchdbiternext(dbp, &ksize)) != NULL) {
@@ -3523,19 +3757,16 @@ char *lessfs_stats()
                 if (S_ISREG(ddstat->stbuf.st_mode)) {
 #ifdef x86_64
                    line=as_sprintf
-                       ("%lu            %lu             %llu            %s\n",
+                       ("%7lu  %15lu  %15llu  %s\n",
                         ddstat->stbuf.st_ino, ddstat->stbuf.st_size,
                         ddstat->real_size, ddstat->filename);
 #else
                    line=as_sprintf
-                       ("%llu           %llu            %llu            %s\n",
+                       ("%7llu  %15llu  %15llu  %s\n",
                         ddstat->stbuf.st_ino, ddstat->stbuf.st_size,
                         ddstat->real_size, ddstat->filename);
 #endif
-                   msg2=lfsmsg;
-                   lfsmsg=as_strcat(msg2,line);
-                   free(msg2);
-                   free(line);
+                   lines[count++] = line;
                 }
                 ddstatfree(ddstat);
             }
@@ -3543,5 +3774,19 @@ char *lessfs_stats()
         }
         free(key);
     }
+    lfsmsg = as_strarrcat(lines, count);
+    while (count) {
+        free((char *)lines[--count]);
+    }
+    free(lines);
     return lfsmsg;
+}
+
+void set_curtime(struct timeval tv)
+{
+   struct timezone tz;
+   tz.tz_minuteswest=0;
+   tz.tz_dsttime=0;
+   gettimeofday(&tv, &tz);
+   return;
 }

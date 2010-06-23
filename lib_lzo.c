@@ -98,10 +98,18 @@ compr *lzo_compress(unsigned char *buf, int buflen)
         exit(2);
     }
     // LDEBUG("Compressed %i bytes to %lu bytes",buflen,(unsigned long)out_len);
-    retdata->data = s_malloc(out_len+1);
-    retdata->size = out_len+1;
-    memcpy(&retdata->data[1], out, out_len);
-    retdata->data[0]='L';
+
+    if ( out_len > buflen ) {
+       retdata->data = s_malloc(buflen+1);
+       memcpy(&retdata->data[1], buf, buflen);
+       retdata->size = buflen+1;
+       retdata->data[0]=0;
+    } else {
+       retdata->data = s_malloc(out_len+1);
+       retdata->size = out_len+1;
+       memcpy(&retdata->data[1], out, out_len);
+       retdata->data[0]='L';
+    }
     lzo_free(wrkmem);
     lzo_free(out);
     pthread_mutex_unlock(&lzo_mutex);

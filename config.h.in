@@ -11,6 +11,9 @@
 /* Define to 1 if using `alloca.c'. */
 #undef C_ALLOCA
 
+/* Define if you want to debug locking */
+#undef DBGLOCK
+
 /* Define if you want debug information */
 #undef DEBUG
 
