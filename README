@@ -8,3 +8,9 @@ Failure to do so will limit the databases to a 2GB filesize.
 If you choose to upgrade from older lessfs release (< lessfs-1.0.4) 
 to lessfs with transaction support then do only use lessfs-1.0.8 or 
 higher with you use the file_io backend.
+
+
+This project was imported from the upstream, but I think the repo is not
+being used for main development any more.
+git cvsimport -d:pserver:anonymous@lessfs.cvs.sourceforge.net:/cvsroot/lessfs \
+    -r upstream-cvs -v lessfs2
